@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.log
+
+.build-venv/
+build/
+dist/
+
+git-relay.toml
+git-relay-error.log
+*.tmp
+.DS_Store

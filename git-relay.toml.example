@@ -1,0 +1,18 @@
+# git-relay 配置模板
+# 复制为同目录下的 git-relay.toml 后填写；本文件不含真实密码。
+# 也可以用环境变量覆盖：GIT_RELAY_HOST / USER / PORT / PASSWORD / KEY / SSH_BACKEND
+
+[remote]
+host = "your-server.example.com"
+user = "your-user"
+port = 22
+# password = "your-password"              # 建议改用 GIT_RELAY_PASSWORD 环境变量
+# key = "C:/Users/you/.ssh/id_ed25519"    # Linux 可写 ~/.ssh/id_ed25519
+# ssh_backend = "auto"                    # auto / openssh / paramiko
+
+[clone]
+# depth = 0                 # 0 表示完整历史；1 表示只拉最新提交，速度最快
+# branch = ""               # 只克隆指定分支，例如 "main"
+# jobs = 4                  # 子模块并发数
+# recurse_submodules = false
+# remote_git = "git"        # 远端 git 可执行文件路径
