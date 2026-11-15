@@ -4,8 +4,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$here = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location $here
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = Split-Path -Parent $scriptDir
+Set-Location $root
 
 if (Get-Command py -ErrorAction SilentlyContinue) {
     $launcher = "py"
@@ -17,7 +18,7 @@ if (Get-Command py -ErrorAction SilentlyContinue) {
     throw "未找到 Python，请先安装 Python 3.11 或更高版本"
 }
 
-$venv = Join-Path $here ".build-venv"
+$venv = Join-Path $root ".build-venv"
 $venvPython = Join-Path $venv "Scripts\python.exe"
 if (-not (Test-Path $venvPython)) {
     Write-Host "[build] 创建构建虚拟环境：$venv"
@@ -47,24 +48,32 @@ if (-not $NoParamiko) {
     }
 }
 
+$dist = Join-Path $root "dist"
+$work = Join-Path $root "build"
+$pyiCommon = @("--noconfirm", "--distpath", $dist, "--workpath", $work)
+
 Write-Host "[build] 打包图形界面（无控制台）"
-& $venvPython -m PyInstaller --noconfirm --clean git-relay-gui.spec
+& $venvPython -m PyInstaller @pyiCommon --clean `
+    (Join-Path $root "packaging\git-relay-gui.spec")
 if ($LASTEXITCODE -ne 0) {
     throw "打包图形界面失败"
 }
 
 Write-Host "[build] 打包命令行版本"
-& $venvPython -m PyInstaller --noconfirm git-relay-cli.spec
+& $venvPython -m PyInstaller @pyiCommon `
+    (Join-Path $root "packaging\git-relay-cli.spec")
 if ($LASTEXITCODE -ne 0) {
     throw "打包命令行版本失败"
 }
 
-Copy-Item -Force "git-relay.toml.example" "dist\git-relay.toml.example"
-Copy-Item -Force "README.md" "dist\README.md"
-Copy-Item -Force "git-relay.cmd" "dist\git-relay.cmd"
+Copy-Item -Force (Join-Path $root "conf\git-relay.toml.example") `
+    (Join-Path $dist "git-relay.toml.example")
+Copy-Item -Force (Join-Path $root "README.md") (Join-Path $dist "README.md")
+Copy-Item -Force (Join-Path $scriptDir "git-relay.cmd") `
+    (Join-Path $dist "git-relay.cmd")
 
 Write-Host ""
 Write-Host "[build] 完成："
-Write-Host "  $here\dist\git-relay.exe      （双击打开图形界面，不弹控制台）"
-Write-Host "  $here\dist\git-relay-cli.exe  （命令行版本）"
-Write-Host "  $here\dist\git-relay.toml.example"
+Write-Host "  $dist\git-relay.exe      （双击打开图形界面，不弹控制台）"
+Write-Host "  $dist\git-relay-cli.exe  （命令行版本）"
+Write-Host "  $dist\git-relay.toml.example"

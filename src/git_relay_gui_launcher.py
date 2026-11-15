@@ -9,8 +9,11 @@ from pathlib import Path
 def _report_error(exc: BaseException) -> None:
     detail = "".join(traceback.format_exception(exc))
     try:
-        log_path = Path(sys.executable).resolve().parent / "git-relay-error.log"
-        log_path.write_text(detail, encoding="utf-8")
+        if getattr(sys, "frozen", False):
+            base = Path(sys.executable).resolve().parent
+        else:
+            base = Path(__file__).resolve().parent.parent
+        (base / "git-relay-error.log").write_text(detail, encoding="utf-8")
     except Exception:
         pass
     try:

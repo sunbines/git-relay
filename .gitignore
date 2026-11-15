@@ -6,6 +6,7 @@ __pycache__/
 build/
 dist/
 
+conf/git-relay.toml
 git-relay.toml
 git-relay-error.log
 *.tmp

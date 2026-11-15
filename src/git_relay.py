@@ -5,10 +5,10 @@
 本地解压并 checkout。适合本机直连 GitHub 很慢、但有一台外网主机可用的场景。
 
 示例：
-    python git_relay.py gui
-    python git_relay.py clone https://github.com/ceph/ceph.git ceph --depth 1
-    python git_relay.py clone --recurse-submodules https://github.com/ceph/ceph.git
-    python git_relay.py check
+    python src/git_relay.py gui
+    python src/git_relay.py clone https://github.com/ceph/ceph.git ceph --depth 1
+    python src/git_relay.py clone --recurse-submodules https://github.com/ceph/ceph.git
+    python src/git_relay.py check
 """
 
 from __future__ import annotations
@@ -37,15 +37,18 @@ except ModuleNotFoundError:  # Python < 3.11
 VERSION = "1.2"
 
 
+FROZEN = getattr(sys, "frozen", False)
+
+
 def app_dir() -> Path:
     # PyInstaller 单文件模式下 __file__ 位于临时解压目录，配置要放在 exe 旁边。
-    if getattr(sys, "frozen", False):
+    if FROZEN:
         return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent
+    return Path(__file__).resolve().parent.parent
 
 
 HERE = app_dir()
-DEFAULT_CONFIG = HERE / "git-relay.toml"
+DEFAULT_CONFIG = HERE / "git-relay.toml" if FROZEN else HERE / "conf" / "git-relay.toml"
 PASSWORD_ENV = "GIT_RELAY_PASSWORD"
 
 
@@ -143,11 +146,11 @@ def validate_remote(remote: Remote) -> None:
     remote.user = remote.user.strip()
     if not remote.host:
         raise RelayError(
-            "未配置 SSH 服务器地址：请在 git-relay.toml、图形界面或 "
+            "未配置 SSH 服务器地址：请在配置文件、图形界面或 "
             "GIT_RELAY_HOST 环境变量中设置")
     if not remote.user:
         raise RelayError(
-            "未配置 SSH 用户：请在 git-relay.toml、图形界面或 "
+            "未配置 SSH 用户：请在配置文件、图形界面或 "
             "GIT_RELAY_USER 环境变量中设置")
     if not 0 < remote.port < 65536:
         raise RelayError(f"SSH 端口不合法：{remote.port}")
@@ -561,14 +564,15 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
-            "  python git_relay.py gui\n"
-            "  python git_relay.py check\n"
-            "  python git_relay.py clone https://github.com/ceph/ceph.git\n"
-            "  python git_relay.py clone --depth 1 URL ceph\n"
-            "  python git_relay.py clone --recurse-submodules URL\n"
+            "  python src/git_relay.py gui\n"
+            "  python src/git_relay.py check\n"
+            "  python src/git_relay.py clone https://github.com/ceph/ceph.git\n"
+            "  python src/git_relay.py clone --depth 1 URL ceph\n"
+            "  python src/git_relay.py clone --recurse-submodules URL\n"
         ))
-    parser.add_argument("-c", "--config", default=str(DEFAULT_CONFIG),
-                        help="TOML 配置文件（默认脚本/exe 同目录 git-relay.toml）")
+    parser.add_argument(
+        "-c", "--config", default=str(DEFAULT_CONFIG),
+        help="TOML 配置文件（源码默认 conf/git-relay.toml，exe 默认同目录 git-relay.toml）")
     parser.add_argument("--ssh-backend", choices=["auto", "openssh", "paramiko"],
                         help="SSH 实现，默认 auto")
     parser.add_argument("--verbose", action="store_true", help="输出更多信息")
