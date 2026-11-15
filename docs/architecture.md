@@ -13,6 +13,44 @@
 - 加 `--recurse-submodules` 时，远端会连同子模块一起 clone，再打包整个仓库回传。
 - 不会修改全局 Git 配置，也不会在本地启动代理。
 
+## 时序图
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant L as 本地 git-relay
+    participant S as SSH 通道
+    participant R as 远端 Linux 主机
+    participant G as GitHub/GitLab
+
+    U->>L: git-relay clone URL DEST
+    L->>S: 建立 SSH 连接
+    L->>S: 发送远端 clone 命令
+    S->>R: 执行 shell 命令
+
+    R->>R: 创建临时目录
+    R->>G: git clone --no-checkout [--depth/--branch]
+    G-->>R: 仓库对象数据
+
+    alt 默认模式
+        R->>R: tar.gz 打包 .git
+    else recurse-submodules 模式
+        R->>G: 拉取子模块
+        G-->>R: 子模块数据
+        R->>R: tar.gz 打包整个 repo
+    end
+
+    R-->>S: 将 tar.gz 写入 stdout
+    S-->>L: 流式传输
+    L->>L: 安全解压到临时目录
+    L->>L: git checkout
+    L->>L: 移动到目标目录
+    L-->>U: 仓库就绪
+
+    Note over R: 退出时 trap 清理远端临时目录
+```
+
 ## SSH 后端
 
 - `paramiko`：纯 Python 实现，密码登录稳定，exe 默认内置。
