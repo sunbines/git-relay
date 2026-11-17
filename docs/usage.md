@@ -98,6 +98,16 @@ Linux 下也可以使用图形界面（需要图形环境和 `tkinter`）：
   https://github.com/ceph/ceph.git ceph
 ```
 
+子模块在远端一并下载并检出，本地不会再访问 GitHub。
+
+如果最初没有加 `--recurse-submodules`，可以在已有仓库中单独补齐子模块：
+
+```bash
+./script/git-relay submodules ceph
+```
+
+工具会读取仓库的 `origin` URL 和当前 `HEAD`，在远端按同一提交拉取子模块，只回传子模块工作区和 `.git/modules`，最后在本地离线检出。相对名称在当前目录不存在时，会按配置中的 `download_dir` 查找，所以配置了 `download_dir = "/home"` 时可以直接写 `submodules ceph`。要求该提交已存在于远端；如果本地有新提交，请先 push。若子模块已全部初始化，命令会直接提示后退出；只有部分初始化时会提示先执行本地 `git submodule update --init --recursive --no-fetch`。
+
 只克隆某个分支：
 
 ```bash
@@ -117,6 +127,7 @@ Windows 命令行：
 ```bat
 script\git-relay.cmd check
 script\git-relay.cmd clone --depth 1 https://github.com/ceph/ceph.git ceph
+script\git-relay.cmd submodules ceph
 ```
 
 打包后也可以直接使用命令行版本：
@@ -124,6 +135,7 @@ script\git-relay.cmd clone --depth 1 https://github.com/ceph/ceph.git ceph
 ```bat
 dist\git-relay-cli.exe check
 dist\git-relay-cli.exe clone --depth 1 https://github.com/ceph/ceph.git ceph
+dist\git-relay-cli.exe submodules ceph
 ```
 
 直接调用 Python 源码：

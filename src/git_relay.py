@@ -38,7 +38,7 @@ try:
 except ModuleNotFoundError:  # Python < 3.11
     tomllib = None
 
-VERSION = "1.2"
+VERSION = "1.3"
 MIB = 1 << 20
 
 
@@ -645,6 +645,40 @@ def remote_clone_command(url: str, options: CloneOptions) -> str:
     return "\n".join(lines)
 
 
+def remote_submodule_command(url: str, commit: str,
+                             options: CloneOptions) -> str:
+    clone = " ".join(
+        shlex.quote(a) if a != '"$tmp/repo"' else a
+        for a in [options.remote_git, "clone", "--no-checkout", "--progress",
+                  "--", url, '"$tmp/repo"'])
+    commit_arg = shlex.quote(commit)
+    git = shlex.quote(options.remote_git)
+    lines = [
+        "set -eu",
+        'tmp=$(mktemp -d /tmp/git-relay.XXXXXX)',
+        "trap 'rm -rf \"$tmp\"' EXIT",
+        "export GIT_TERMINAL_PROMPT=0",
+        "export LC_ALL=C",
+        f"{clone} >&2",
+        f'if ! {git} -C "$tmp/repo" cat-file -e '
+        f'{shlex.quote(commit + "^{commit}")} 2>/dev/null; then',
+        f'  echo "git-relay: local commit {commit} is not on the remote" >&2',
+        "  exit 4",
+        "fi",
+        f'{git} -C "$tmp/repo" checkout -q --detach {commit_arg} >&2',
+        f'{git} -C "$tmp/repo" -c submodule.fetchJobs={options.jobs} '
+        'submodule update --init --recursive >&2',
+        f'{git} -C "$tmp/repo" submodule foreach --quiet '
+        '\'echo "$displaypath"\' > "$tmp/paths"',
+        'if [ -d "$tmp/repo/.git/modules" ]; then '
+        'printf \'.git/modules\\n\' > "$tmp/list"; '
+        'else : > "$tmp/list"; fi',
+        'if [ -s "$tmp/paths" ]; then cat "$tmp/paths" >> "$tmp/list"; fi',
+        'cd "$tmp/repo" && tar -czf - -T "$tmp/list"',
+    ]
+    return "\n".join(lines)
+
+
 def validate_member(member: tarfile.TarInfo) -> None:
     name = member.name.replace("\\", "/")
     path = PurePosixPath(name)
@@ -746,6 +780,91 @@ def resolve_dest(url: str, explicit: str | Path | None,
     return base / name if base else name
 
 
+def fetch_submodules(dest: Path, remote: Remote, options: CloneOptions,
+                     verbose: bool, dry_run: bool) -> None:
+    if shutil.which("git") is None:
+        raise RelayError("local git not found; please install Git")
+    dest = dest.expanduser()
+    if not dest.is_absolute() and not dest.exists() and options.download_dir:
+        dest = Path(options.download_dir).expanduser() / dest
+    if not dest.exists():
+        raise RelayError(f"local repository path does not exist: {dest}")
+    top = run_local(["git", "-C", str(dest), "rev-parse", "--show-toplevel"],
+                    check=False)
+    if top.returncode != 0:
+        detail = (top.stderr or top.stdout).strip()
+        hint = f": {detail[-1000:]}" if detail else ""
+        raise RelayError(f"not a Git work tree: {dest}{hint}")
+    repo = Path(top.stdout.strip())
+    if not (repo / ".gitmodules").exists():
+        log(f"no submodules in {repo}")
+        return
+    status = run_local(["git", "-C", str(repo), "submodule", "status"],
+                       check=False)
+    if status.returncode != 0:
+        detail = (status.stderr or status.stdout).strip()
+        raise RelayError(f"failed to inspect submodules: {detail[-3000:]}")
+    entries = [line for line in status.stdout.splitlines() if line.strip()]
+    uninitialized = [line for line in entries if line.startswith("-")]
+    if not entries:
+        log(f"no submodules in {repo}")
+        return
+    if not uninitialized:
+        log(f"submodules already initialized in {repo}")
+        return
+    if len(uninitialized) != len(entries):
+        raise RelayError(
+            "only some submodules are initialized; run "
+            "'git submodule update --init --recursive --no-fetch' locally "
+            "or remove .git/modules before retrying")
+    url = run_local(["git", "-C", str(repo), "config", "--get",
+                     "remote.origin.url"], check=False).stdout.strip()
+    if not url:
+        raise RelayError(
+            "cannot read remote.origin.url; the repository was not cloned "
+            "from a remote")
+    commit = run_local(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"]).stdout.strip()
+    command = remote_submodule_command(url, commit, options)
+    if dry_run:
+        print("Remote command:")
+        print(command)
+        print(f"Local repository: {repo}")
+        return
+    validate_remote(remote)
+    runner = make_runner(remote, verbose)
+    try:
+        with tempfile.TemporaryDirectory(prefix="git-relay-") as tmp:
+            archive = Path(tmp) / "submodules.tar.gz"
+            log(f"fetching submodules for {repo} via "
+                f"{remote.user}@{remote.host}:{remote.port}")
+            rc = runner.download(command, archive)
+            if rc == 4:
+                raise RelayError(
+                    "the local HEAD commit is not present on the remote; "
+                    "push your commits first")
+            if rc != 0:
+                raise RelayError(
+                    f"remote submodule fetch failed (exit {rc}); check the "
+                    f"repository URL and remote network")
+            log("extracting submodules")
+            extract_archive(archive, repo)
+        log("initializing submodules locally")
+        result = run_local(
+            ["git", "-C", str(repo), "-c",
+             f"submodule.fetchJobs={options.jobs}",
+             "submodule", "update", "--init", "--recursive", "--no-fetch"],
+            check=False)
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            raise RelayError(
+                f"local submodule initialization failed "
+                f"(exit {result.returncode}): {detail[-3000:]}")
+    finally:
+        runner.close()
+    log(f"submodules ready: {repo}")
+
+
 def clone(url: str, dest: Path, remote: Remote, options: CloneOptions,
           verbose: bool, dry_run: bool) -> None:
     if shutil.which("git") is None:
@@ -837,6 +956,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  python src/git_relay.py clone https://github.com/ceph/ceph.git\n"
             "  python src/git_relay.py clone --depth 1 URL ceph\n"
             "  python src/git_relay.py clone --recurse-submodules URL\n"
+            "  python src/git_relay.py submodules ceph\n"
         ))
     parser.add_argument(
         "-c", "--config", default=str(DEFAULT_CONFIG),
@@ -870,6 +990,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_clone.add_argument("--dry-run", action="store_true",
                          help="print the remote command without executing it")
     p_clone.set_defaults(func="clone")
+
+    p_sub = sub.add_parser(
+        "submodules",
+        help="fetch submodules for an existing local clone via the remote host")
+    p_sub.add_argument(
+        "dest", nargs="?", default=".",
+        help="existing local repository (default: current directory; a "
+             "relative name is looked up under clone.download_dir)")
+    p_sub.add_argument("--jobs", type=int, help="submodule concurrency")
+    p_sub.add_argument("--dry-run", action="store_true",
+                       help="print the remote command without executing it")
+    p_sub.set_defaults(func="submodules")
     return parser
 
 
@@ -909,6 +1041,14 @@ def main(argv: list[str] | None = None) -> int:
                 raise RelayError("jobs must be greater than 0")
             dest = resolve_dest(args.url, args.dest, options)
             clone(args.url, dest, remote, options, args.verbose, args.dry_run)
+            return 0
+        if args.command == "submodules":
+            if args.jobs is not None:
+                options.jobs = args.jobs
+            if options.jobs < 1:
+                raise RelayError("jobs must be greater than 0")
+            fetch_submodules(Path(args.dest).expanduser(), remote, options,
+                             args.verbose, args.dry_run)
             return 0
         return check(remote, args.verbose)
     except KeyboardInterrupt:

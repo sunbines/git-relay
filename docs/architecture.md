@@ -69,6 +69,7 @@ sequenceDiagram
 
 ## 限制
 
+- `submodules` 子命令会读取本地仓库的 `origin` 和 `HEAD`，在远端按该提交拉取子模块，只回传子模块工作区和 `.git/modules`，本地再用 `--no-fetch` 完成检出。
 - 目前是“克隆加速器”，不是 Git remote helper；已有仓库的增量 `fetch` 仍需手动处理。
 - 每次执行会重新在远端 clone；后续可以扩展为远端缓存仓库 + 增量 bundle。
 - Git LFS 仓库只回传指针文件；本地 `git checkout` 时仍会直连 GitHub 拉取 LFS 对象，这部分不会被加速。
