@@ -97,6 +97,7 @@ class CloneOptions:
     recurse_submodules: bool = False
     jobs: int = 4
     remote_git: str = "git"
+    download_dir: str = ""
 
 
 @dataclass
@@ -189,6 +190,8 @@ def load_config(path: Path) -> tuple[Remote, CloneOptions]:
                      "clone.jobs"),
         remote_git=os.environ.get("GIT_RELAY_REMOTE_GIT",
                                   str(c.get("remote_git", "git"))),
+        download_dir=os.environ.get("GIT_RELAY_DOWNLOAD_DIR",
+                                    str(c.get("download_dir", ""))).strip(),
     )
     if remote.backend not in {"auto", "openssh", "paramiko"}:
         raise RelayError(
@@ -727,6 +730,16 @@ def default_dest(url: str) -> Path:
     return Path(name or "repo")
 
 
+def resolve_dest(url: str, explicit: str | Path | None,
+                 options: CloneOptions, default_base: Path | None = None) -> Path:
+    if explicit:
+        return Path(explicit).expanduser()
+    name = default_dest(url)
+    base = (Path(options.download_dir).expanduser()
+            if options.download_dir else default_base)
+    return base / name if base else name
+
+
 def clone(url: str, dest: Path, remote: Remote, options: CloneOptions,
           verbose: bool, dry_run: bool) -> None:
     if shutil.which("git") is None:
@@ -888,7 +901,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise RelayError("depth cannot be negative")
             if options.jobs < 1:
                 raise RelayError("jobs must be greater than 0")
-            dest = Path(args.dest) if args.dest else default_dest(args.url)
+            dest = resolve_dest(args.url, args.dest, options)
             clone(args.url, dest, remote, options, args.verbose, args.dry_run)
             return 0
         return check(remote, args.verbose)

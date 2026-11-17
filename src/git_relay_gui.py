@@ -19,8 +19,8 @@ from git_relay import (
     Remote,
     check,
     clone,
-    default_dest,
     load_config,
+    resolve_dest,
     validate_remote,
 )
 
@@ -65,6 +65,7 @@ def save_config(path: Path, remote: Remote, options: CloneOptions) -> None:
         f"jobs = {options.jobs}",
         f"recurse_submodules = {str(options.recurse_submodules).lower()}",
         f"remote_git = {_toml_string(options.remote_git)}",
+        f"download_dir = {_toml_string(options.download_dir)}",
         "",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -311,9 +312,11 @@ class RelayGUI:
             self.key_var.set(path)
 
     def _browse_dest(self) -> None:
+        initial = (Path(self.options.download_dir).expanduser()
+                   if self.options.download_dir else Path.home())
         path = filedialog.askdirectory(
             title="选择本地目录", parent=self.root,
-            initialdir=str(Path.home()))
+            initialdir=str(initial) if initial.is_dir() else str(Path.home()))
         if path:
             self.dest_var.set(path)
 
@@ -379,10 +382,7 @@ class RelayGUI:
             if not url:
                 raise RelayError("请填写仓库 URL")
             dest_text = self.dest_var.get().strip()
-            dest = (
-                Path(dest_text).expanduser()
-                if dest_text else Path.home() / default_dest(url)
-            )
+            dest = resolve_dest(url, dest_text, options, Path.home())
         except RelayError as exc:
             messagebox.showerror("配置错误", str(exc), parent=self.root)
             return

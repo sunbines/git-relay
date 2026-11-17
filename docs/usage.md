@@ -51,7 +51,10 @@ port = 22
 # password = "your-password"
 # key = "/home/you/.ssh/id_ed25519"
 # ssh_backend = "auto"
+# download_dir = "/data/repos"
 ```
+
+`download_dir` 是默认下载目录：命令行未指定 `DEST` 时，仓库会克隆到 `<download_dir>/<仓库名>`；如果指定了 `DEST`，则 `DEST` 优先。相对路径按当前工作目录解析。
 
 推荐不要把密码写进文件，改用环境变量：
 
@@ -155,7 +158,7 @@ python3 src/git_relay.py check
 命令行参数 > 环境变量 > TOML 配置文件 > 内置默认值（仅端口和后端等）
 ```
 
-图形界面以输入框内容为准；启动时用配置文件和环境变量预填。
+图形界面以输入框内容为准；启动时用配置文件和环境变量预填。本地目录留空时，使用配置中的 `download_dir`；未配置则使用用户主目录。
 
 默认配置文件位置：
 
@@ -175,6 +178,10 @@ python3 src/git_relay.py check
 | `GIT_RELAY_KEY` | SSH 私钥路径 |
 | `GIT_RELAY_SSH_BACKEND` | `auto` / `openssh` / `paramiko` |
 | `GIT_RELAY_DEPTH` | 默认浅克隆深度 |
+| `GIT_RELAY_BRANCH` | 默认克隆分支 |
+| `GIT_RELAY_JOBS` | 子模块并发数 |
+| `GIT_RELAY_REMOTE_GIT` | 远端 `git` 可执行文件 |
+| `GIT_RELAY_DOWNLOAD_DIR` | 默认下载目录 |
 
 ## 退出码
 
