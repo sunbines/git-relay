@@ -48,8 +48,18 @@ sequenceDiagram
     L->>L: 移动到目标目录
     L-->>U: 仓库就绪
 
+    Note over R,L: clone 进度和统计标记经 stderr 实时转发，令牌桶限流后刷新
     Note over R: 退出时 trap 清理远端临时目录
 ```
+
+## 进度与速度统计
+
+- 远端 `git clone` 使用 `--progress`，stderr 中的进度经 SSH 实时转发到本地；本地解析 `Receiving objects` 等行，统一成 `clone: ...` 格式。
+- 远端在 clone 结束后通过 stderr 发送内部统计标记，包含克隆耗时和仓库大小；该标记不会显示在日志中。
+- 本地据此计算远端平均下载速度，并在回传结束后输出远端仓库大小。
+- 回传阶段按已接收字节数计算实时速度；本地 checkout 完成后统计目标目录大小。
+- 所有进度刷新都经过令牌桶限流（默认 4 次/秒，容量 2）：终端中原地刷新一行，非终端环境（GUI、重定向）逐行输出。
+- Paramiko 后端直接读取 SSH 通道的 stderr，OpenSSH 后端使用 `read1`，避免缓冲区等待导致进度滞后。
 
 ## SSH 后端
 

@@ -22,7 +22,7 @@ python src\git_relay.py gui
 - 仓库 URL、本地目录
 - 浅克隆深度、分支、是否拉取子模块
 
-然后点击 **测试连接** 或 **开始克隆**，日志会实时显示在窗口中。
+然后点击 **测试连接** 或 **开始克隆**，日志会实时显示在窗口中（进度格式见下文“进度输出”）。
 
 **保存设置（不含密码）** 会把服务器、用户、端口、私钥和克隆选项写入当前配置文件：
 
@@ -128,6 +128,24 @@ dist\git-relay-cli.exe clone --depth 1 https://github.com/ceph/ceph.git ceph
 ```bash
 python3 src/git_relay.py check
 ```
+
+## 进度输出
+
+命令行和 GUI 使用相同的进度统计，示例：
+
+```text
+[git-relay] clone: Receiving objects 45% (1234/2741) 12.3 MiB | 5.6 MiB/s
+[git-relay] transfer 18.4 MiB (9.2 MiB/s)
+[git-relay] transfer complete: 45.2 MiB in 8.3s (5.45 MiB/s)
+[git-relay] remote repository size: 117.7 MiB (cloned in 12s, 9.81 MiB/s)
+[git-relay] local repository size: 210.4 MiB
+```
+
+- 远端 clone 阶段显示对象接收进度、已接收大小和远端下载速度。
+- 回传阶段显示已传输大小和实时速度，结束时输出总量、耗时和平均速度。
+- 完成后输出远端仓库大小和本地项目大小。
+- 刷新频率由令牌桶算法控制（默认每秒 4 次，容量 2），终端中原地刷新一行，GUI 和重定向输出中逐行追加，避免刷屏。
+- 小仓库可能在 1 秒内完成，此时只会看到最终统计结果。
 
 ## 配置优先级
 
