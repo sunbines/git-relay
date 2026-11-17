@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import posixpath
 import re
 import shlex
 import shutil
@@ -655,7 +656,12 @@ def validate_member(member: tarfile.TarInfo) -> None:
         raise RelayError(f"archive contains a special file: {member.name}")
     if member.issym() or member.islnk():
         target = PurePosixPath(member.linkname.replace("\\", "/"))
-        if target.is_absolute() or ".." in target.parts:
+        base = PurePosixPath(name).parent if member.issym() else PurePosixPath()
+        resolved = PurePosixPath(posixpath.normpath(str(base / target)))
+        if (target.is_absolute()
+                or (target.parts and ":" in target.parts[0])
+                or resolved.is_absolute()
+                or (resolved.parts and resolved.parts[0] == "..")):
             raise RelayError(f"archive contains an unsafe link: {member.name}")
 
 
