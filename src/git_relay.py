@@ -33,10 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Callable
 
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python < 3.11
-    tomllib = None
+from toml_compat import parse_toml, toml_backend
 
 VERSION = "1.3"
 MIB = 1 << 20
@@ -161,11 +158,8 @@ def _as_int(value: object, what: str) -> int:
 def load_config(path: Path) -> tuple[Remote, CloneOptions]:
     data: dict = {}
     if path.exists():
-        if tomllib is None:
-            raise RelayError(
-                "reading TOML requires Python 3.11+ (or install tomli)")
         try:
-            data = tomllib.loads(path.read_text(encoding="utf-8"))
+            data = parse_toml(path.read_text(encoding="utf-8"))
         except Exception as exc:
             raise RelayError(
                 f"failed to parse config file {path}: {exc}") from exc
@@ -598,8 +592,9 @@ def make_runner(remote: Remote, verbose: bool) -> Runner:
     if backend == "paramiko":
         if importlib.util.find_spec("paramiko") is None:
             raise RelayError(
-                "ssh_backend=paramiko but paramiko is not installed; run: "
-                "python -m pip install paramiko")
+                "ssh_backend=paramiko but paramiko is not installed; install "
+                "python3-paramiko (openEuler) or run: "
+                "python3 -m pip install paramiko")
         return ParamikoRunner(remote, verbose)
     if os.name == "nt" and remote.password:
         warn("OpenSSH password login may fail to show the askpass prompt "
@@ -915,6 +910,7 @@ def clone(url: str, dest: Path, remote: Remote, options: CloneOptions,
 def check(remote: Remote, verbose: bool) -> int:
     validate_remote(remote)
     ok = True
+    log(f"python: {sys.version.split()[0]} (TOML: {toml_backend()})")
     local_git = shutil.which("git")
     if local_git is None:
         warn("git not found on this machine")
@@ -922,14 +918,35 @@ def check(remote: Remote, verbose: bool) -> int:
     else:
         result = run_local(["git", "--version"], check=False)
         log(f"local: {result.stdout.strip() or result.stderr.strip()}")
+    if importlib.util.find_spec("tkinter") is None:
+        log("tkinter: not installed (GUI unavailable; CLI works)")
+    else:
+        log("tkinter: available")
     backend = resolve_backend(remote)
+    has_paramiko = importlib.util.find_spec("paramiko") is not None
+    if has_paramiko:
+        log("paramiko: available")
+    elif backend == "paramiko":
+        warn("paramiko is not installed; install python3-paramiko "
+             "or use ssh_backend=openssh")
+        ok = False
+    else:
+        log("paramiko: not installed (optional)")
     log(f"SSH backend: {backend} "
         f"({remote.user}@{remote.host}:{remote.port})")
+    if backend == "openssh" and shutil.which("ssh") is None:
+        warn("ssh not found on this machine; install an OpenSSH client")
+        return 1
+    if backend == "paramiko" and not has_paramiko:
+        return 1
     runner = make_runner(remote, verbose)
     try:
         rc, out, err = runner.run_capture(
             "set -e; git --version; tar --version | head -n 1; "
-            "command -v mktemp >/dev/null; command -v gzip >/dev/null")
+            "command -v mktemp >/dev/null; command -v gzip >/dev/null; "
+            "command -v du >/dev/null; command -v cut >/dev/null; "
+            "command -v date >/dev/null; command -v cat >/dev/null; "
+            "command -v head >/dev/null")
     finally:
         runner.close()
     if rc != 0:

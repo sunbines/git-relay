@@ -69,11 +69,13 @@ export GIT_RELAY_PASSWORD='你的密码'
 
 ## 依赖
 
-- Python 3.11+（使用标准库 `tomllib`）
+- Python 3.9+（3.11+ 使用标准库 `tomllib`；3.9/3.10 使用内置 TOML 解析，安装 `tomli` 可获得完整支持）
 - Git（本地和远端）
 - SSH 客户端
-- 密码登录建议安装 Paramiko：`python -m pip install paramiko`
-- Linux 图形界面需要 `tkinter`，命令行不需要
+- 密码登录建议安装 Paramiko：openEuler 可执行 `dnf install python3-paramiko`，也可使用 `python3 -m pip install paramiko`
+- Linux 图形界面需要 `tkinter`，命令行不需要；openEuler 可安装 `python3-devel`，Debian/Ubuntu 为 `python3-tk`
+
+配置好远端后，运行 `./script/git-relay check` 可检查本地 Python 模块、`git`/`ssh` 以及远端所需命令是否齐全。
 
 ## 文档
 

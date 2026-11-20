@@ -16,7 +16,7 @@ export GIT_RELAY_PASSWORD='你的密码'
 python3 src/git_relay.py check
 ```
 
-确认服务器地址、用户、端口、密码或私钥正确。Windows 密码登录建议安装 Paramiko，或使用已内置 Paramiko 的 exe。
+确认服务器地址、用户、端口、密码或私钥正确。Windows 密码登录建议安装 Paramiko，或使用已内置 Paramiko 的 exe；Linux 可安装 `python3-paramiko`，也可以继续使用 OpenSSH 后端。
 
 ## 远端 git clone 失败
 
@@ -53,4 +53,4 @@ ssh your-user@your-server.example.com \
 
 ## Linux 图形界面无法启动
 
-确认系统已安装 `tkinter`（部分发行版包名为 `python3-tk`）。只使用命令行时不需要该依赖。
+确认系统已安装 `tkinter`（openEuler 可安装 `python3-devel`，Debian/Ubuntu 为 `python3-tk`）。只使用命令行时不需要该依赖。
