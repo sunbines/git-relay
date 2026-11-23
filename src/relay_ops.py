@@ -36,7 +36,11 @@ def remote_clone_command(url: str, options: CloneOptions) -> str:
     args = [options.remote_git, "clone"]
     if options.jobs > 0:
         args += ["-c", f"submodule.fetchJobs={options.jobs}"]
-    args += ["--no-checkout", "--progress"]
+    args += ["--progress"]
+    if not options.recurse_submodules:
+        # With --recurse-submodules git skips submodule initialization when
+        # --no-checkout is set, so the archive would lack submodule objects.
+        args += ["--no-checkout"]
     if options.depth > 0:
         args += ["--depth", str(options.depth)]
     if options.branch:
@@ -54,7 +58,7 @@ def remote_clone_command(url: str, options: CloneOptions) -> str:
         "export GIT_TERMINAL_PROMPT=0",
         "export LC_ALL=C",
         'start=$(date +%s)',
-        clone,
+        f"{clone} >&2",
         'end=$(date +%s)',
         'repo_bytes=$(du -sb "$tmp/repo" 2>/dev/null | cut -f1 || true)',
         '[ -n "$repo_bytes" ] || '
