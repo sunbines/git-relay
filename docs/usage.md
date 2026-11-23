@@ -124,6 +124,33 @@ Linux 下也可以使用图形界面（需要图形环境和 `tkinter`）：
   https://github.com/example/project.git
 ```
 
+## 同步已有仓库（fetch / pull / push）
+
+对本地已有仓库执行网络操作，默认经中转主机访问外网：
+
+```bash
+./script/git-relay fetch ceph            # 只更新远端跟踪分支和标签
+./script/git-relay pull ceph             # fetch 后对当前分支做 fast-forward
+./script/git-relay pull ceph --branch main
+./script/git-relay push ceph             # 推送当前分支
+./script/git-relay push ceph --branch main --remote origin
+```
+
+- `--mode relay`：远端主机维护裸仓库镜像（默认缓存 `~/.cache/git-relay`），fetch 时把新对象打包回传；push 时把本机对象上传给远端，再由远端推送到 origin。
+- `--mode direct`：直接用本机 `git` 执行，中转只用于 clone。
+- 不传 `--mode` 时使用配置 `[git].mode`（默认 `relay`），`GIT_RELAY_GIT_MODE` 可覆盖。
+- `pull` 只做 fast-forward，分支已分叉时会报错，请手动 merge/rebase。
+- relay 模式 push 要求远端主机对该仓库具备推送凭据（SSH key、HTTPS token 等）；凭据错误会原样打印远端 git 的输出。
+
+配置文件中的默认值：
+
+```toml
+[git]
+mode = "relay"            # relay / direct
+remote = "origin"         # 本地 git 远程名
+# cache_dir = ""          # 远端镜像缓存目录（默认 ~/.cache/git-relay）
+```
+
 Windows 命令行：
 
 ```bat
@@ -196,6 +223,9 @@ python3 src/git_relay.py check
 | `GIT_RELAY_JOBS` | 子模块并发数 |
 | `GIT_RELAY_REMOTE_GIT` | 远端 `git` 可执行文件 |
 | `GIT_RELAY_DOWNLOAD_DIR` | 默认下载目录 |
+| `GIT_RELAY_GIT_MODE` | 同步方式 `relay` / `direct` |
+| `GIT_RELAY_GIT_REMOTE` | 本地 git 远程名 |
+| `GIT_RELAY_GIT_CACHE_DIR` | 远端镜像缓存目录 |
 
 ## 退出码
 

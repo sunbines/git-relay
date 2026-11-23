@@ -11,18 +11,18 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from git_relay import (
+from relay_common import (
     DEFAULT_CONFIG,
     VERSION,
     CloneOptions,
+    GitOptions,
     RelayError,
     Remote,
-    check,
-    clone,
     load_config,
     resolve_dest,
-    validate_remote,
 )
+from relay_ops import check, clone, fetch_remote, pull_remote, push_remote
+from relay_ssh import validate_remote
 
 
 class QueueWriter:
@@ -44,7 +44,8 @@ def _toml_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def save_config(path: Path, remote: Remote, options: CloneOptions) -> None:
+def save_config(path: Path, remote: Remote, options: CloneOptions,
+                git: GitOptions) -> None:
     lines = [
         "# git-relay 配置（由图形界面保存，不包含密码）",
         "# 密码请在图形界面输入，或设置 GIT_RELAY_PASSWORD 环境变量。",
@@ -66,6 +67,11 @@ def save_config(path: Path, remote: Remote, options: CloneOptions) -> None:
         f"recurse_submodules = {str(options.recurse_submodules).lower()}",
         f"remote_git = {_toml_string(options.remote_git)}",
         f"download_dir = {_toml_string(options.download_dir)}",
+        "",
+        "[git]",
+        f"mode = {_toml_string(git.mode)}",
+        f"remote = {_toml_string(git.remote)}",
+        f"cache_dir = {_toml_string(git.cache_dir)}",
         "",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -132,9 +138,10 @@ class RelayGUI:
 
         self.startup_error = ""
         try:
-            self.remote, self.options = load_config(config_path)
+            self.remote, self.options, self.git = load_config(config_path)
         except Exception as exc:
-            self.remote, self.options = Remote(), CloneOptions()
+            self.remote, self.options, self.git = (
+                Remote(), CloneOptions(), GitOptions())
             self.startup_error = str(exc)
         if backend_override:
             self.remote.backend = backend_override
@@ -159,7 +166,7 @@ class RelayGUI:
         outer = ttk.Frame(self.root, padding=12)
         outer.grid(row=0, column=0, sticky="nsew")
         outer.columnconfigure(0, weight=1)
-        outer.rowconfigure(3, weight=1)
+        outer.rowconfigure(4, weight=1)
 
         server = ttk.LabelFrame(outer, text="远程服务器", padding=10)
         server.grid(row=0, column=0, sticky="ew")
@@ -254,8 +261,37 @@ class RelayGUI:
             variable=self.recurse_var).grid(
             row=3, column=1, columnspan=3, sticky="w", pady=4)
 
+        self.mode_var = tk.StringVar(value="relay")
+        ttk.Label(repo, text="同步方式").grid(
+            row=4, column=0, sticky="w", padx=(0, 8), pady=4)
+        ttk.Combobox(
+            repo, textvariable=self.mode_var, state="readonly",
+            values=("relay", "direct"), width=12).grid(
+            row=4, column=1, sticky="w", pady=4)
+        ttk.Label(
+            repo, text="relay: 经中转主机访问外网；direct: 本机直接执行 git",
+            foreground="#666666").grid(
+            row=4, column=2, columnspan=2, sticky="w", padx=8, pady=4)
+
+        sync = ttk.LabelFrame(
+            outer, text="同步已有仓库（使用上面的本地目录）", padding=10)
+        sync.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        self.fetch_button = ttk.Button(
+            sync, text="抓取 fetch",
+            command=lambda: self._start_sync("fetch"))
+        self.fetch_button.pack(side="left")
+        self.pull_button = ttk.Button(
+            sync, text="拉取 pull", command=lambda: self._start_sync("pull"))
+        self.pull_button.pack(side="left", padx=8)
+        self.push_button = ttk.Button(
+            sync, text="推送 push", command=lambda: self._start_sync("push"))
+        self.push_button.pack(side="left")
+        ttk.Label(
+            sync, text="pull 仅做 fast-forward；推送需要中转主机具备推送凭据",
+            foreground="#666666").pack(side="right")
+
         buttons = ttk.Frame(outer)
-        buttons.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        buttons.grid(row=3, column=0, sticky="ew", pady=(10, 0))
         self.test_button = ttk.Button(
             buttons, text="测试连接", command=self._test_connection)
         self.test_button.pack(side="left")
@@ -269,7 +305,7 @@ class RelayGUI:
             side="right")
 
         log_frame = ttk.LabelFrame(outer, text="日志", padding=6)
-        log_frame.grid(row=3, column=0, sticky="nsew", pady=(10, 0))
+        log_frame.grid(row=4, column=0, sticky="nsew", pady=(10, 0))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
         self.log_text = tk.Text(
@@ -283,7 +319,7 @@ class RelayGUI:
 
         self.status_var = tk.StringVar(value="请填写服务器、用户和密码或私钥")
         ttk.Label(outer, textvariable=self.status_var).grid(
-            row=4, column=0, sticky="w", pady=(8, 0))
+            row=5, column=0, sticky="w", pady=(8, 0))
 
     def _apply_config(self) -> None:
         self.host_var.set(self.remote.host)
@@ -295,6 +331,7 @@ class RelayGUI:
         self.depth_var.set(str(self.options.depth))
         self.branch_var.set(self.options.branch)
         self.recurse_var.set(self.options.recurse_submodules)
+        self.mode_var.set(self.git.mode)
         if self.remote.host and self.remote.user:
             self.status_var.set(
                 f"已加载 {self.config_path}；确认后点击测试连接")
@@ -350,11 +387,15 @@ class RelayGUI:
             recurse_submodules=bool(self.recurse_var.get()),
         )
 
+    def _git_from_fields(self) -> GitOptions:
+        return replace(self.git, mode=self.mode_var.get() or "relay")
+
     def _save_settings(self) -> None:
         try:
             remote = self._remote_from_fields()
             options = self._options_from_fields()
-            save_config(self.config_path, remote, options)
+            git = self._git_from_fields()
+            save_config(self.config_path, remote, options, git)
         except Exception as exc:
             messagebox.showerror("保存失败", str(exc), parent=self.root)
             return
@@ -392,6 +433,29 @@ class RelayGUI:
             clone(url, dest, remote, options, self.verbose, dry_run=False)
 
         self._start_task("克隆仓库", action, f"克隆完成：{dest}")
+
+    def _start_sync(self, kind: str) -> None:
+        try:
+            remote = self._remote_from_fields()
+            options = self._options_from_fields()
+            git = self._git_from_fields()
+            dest_text = self.dest_var.get().strip()
+            if not dest_text:
+                raise RelayError("请先填写本地目录（已有仓库路径）")
+            dest = Path(dest_text).expanduser()
+        except RelayError as exc:
+            messagebox.showerror("配置错误", str(exc), parent=self.root)
+            return
+        branch = self.branch_var.get().strip()
+        func = {"fetch": fetch_remote, "pull": pull_remote,
+                "push": push_remote}[kind]
+        names = {"fetch": "抓取", "pull": "拉取", "push": "推送"}
+
+        def action() -> None:
+            func(dest, remote, options, git, branch=branch,
+                 verbose=self.verbose, dry_run=False)
+
+        self._start_task(names[kind], action, f"{names[kind]}完成：{dest}")
 
     def _start_task(self, name: str, action, success_status: str) -> None:
         if self.running:
@@ -447,7 +511,8 @@ class RelayGUI:
 
     def _set_buttons(self, enabled: bool) -> None:
         state = "normal" if enabled else "disabled"
-        for button in (self.test_button, self.clone_button, self.save_button):
+        for button in (self.test_button, self.clone_button, self.save_button,
+                       self.fetch_button, self.pull_button, self.push_button):
             button.configure(state=state)
 
     def _append(self, text: str) -> None:

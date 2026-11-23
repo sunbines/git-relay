@@ -3,6 +3,7 @@
 # 打包使用：复制为 exe 同目录的 git-relay.toml
 # 本文件不含真实密码，也可以用环境变量覆盖：
 # GIT_RELAY_HOST / USER / PORT / PASSWORD / KEY / SSH_BACKEND / DOWNLOAD_DIR
+# GIT_RELAY_GIT_MODE / GIT_RELAY_GIT_REMOTE / GIT_RELAY_GIT_CACHE_DIR
 
 [remote]
 host = "your-server.example.com"
@@ -19,3 +20,8 @@ port = 22
 # recurse_submodules = false
 # remote_git = "git"        # 远端 git 可执行文件路径
 download_dir = "/root"        # 默认下载目录：未指定 DEST 时克隆到 <download_dir>/<仓库名>
+
+[git]
+# mode = "relay"            # relay: fetch/pull/push 经中转主机访问外网；direct: 本机直接执行 git
+# remote = "origin"         # 本地 git 远程名
+# cache_dir = ""            # 中转主机上的镜像缓存目录（默认 ~/.cache/git-relay）
