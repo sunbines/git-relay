@@ -27,7 +27,7 @@ git-relay/
 ├── src/                 Python 源码
 ├── docs/                详细文档
 ├── script/              启动和打包脚本
-├── install.sh           安装命令到 PATH
+├── setup-git-relay.sh   安装和卸载命令
 ├── conf/                配置模板
 ├── packaging/           PyInstaller 打包配置
 ├── README.md
@@ -59,7 +59,7 @@ python src\git_relay.py gui
 ### Linux
 
 ```bash
-./install.sh
+./setup-git-relay.sh
 git-relay config > /tmp/git-relay.toml
 mv /tmp/git-relay.toml conf/git-relay.toml
 # 编辑 conf/git-relay.toml，填入服务器和用户
@@ -71,7 +71,7 @@ git-relay clone --depth 1 https://github.com/ceph/ceph.git ceph
 
 `git-relay config` 输出当前生效的配置（配置文件 + 环境变量 + 默认值），可直接作为 TOML 文件使用；密码不会写入输出，请使用 `GIT_RELAY_PASSWORD`。先输出到临时文件再替换，避免 shell 重定向提前截断正在读取的配置。
 
-`install.sh` 会把命令链接到 PATH：root 用户默认 `/usr/local/bin`，普通用户默认 `~/.local/bin`；可用 `--prefix DIR` 指定其他位置，`--uninstall` 删除。不安装时也可以继续用 `./script/git-relay`。
+`setup-git-relay.sh` 会把命令链接到 PATH：root 用户默认 `/usr/local/bin`，普通用户默认 `~/.local/bin`；可用 `--prefix DIR` 指定其他位置。运行 `./setup-git-relay.sh --uninstall` 卸载（不会删除 `conf/git-relay.toml`），加 `--build` 同时清理 `.build-venv`、`build`、`dist` 和 Python 缓存。不安装时也可以继续用 `./script/git-relay`。
 
 完整用法见 [docs/usage.md](docs/usage.md)。
 

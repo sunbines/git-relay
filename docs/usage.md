@@ -77,7 +77,7 @@ Linux 下也可以使用图形界面（需要图形环境和 `tkinter`）：
 在仓库根目录执行：
 
 ```bash
-./install.sh
+./setup-git-relay.sh
 git-relay --version
 ```
 
@@ -86,7 +86,8 @@ git-relay --version
 - root 用户默认安装到 `/usr/local/bin`。
 - 普通用户默认安装到 `~/.local/bin`。
 - 用 `--prefix DIR` 可以安装到 `DIR/bin`。
-- 用 `--uninstall` 删除已安装的命令；`--force` 覆盖同名文件。
+- 用 `--uninstall` 卸载（不会删除 `conf/git-relay.toml`）；配合 `--build` 同时删除 `.build-venv`、`build`、`dist` 和 `__pycache__`。
+- 用 `--force` 覆盖同名文件，或删除不是本仓库安装的同名文件。
 
 如果 `~/.local/bin` 不在 `PATH`，脚本会打印需要添加的 `export PATH=...`。安装的是指向本仓库的符号链接，仓库移动后需要重新执行安装脚本；不安装时仍可使用 `./script/git-relay`。配置默认读取仓库中的 `conf/git-relay.toml`，与当前工作目录无关。
 
