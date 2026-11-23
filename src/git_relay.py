@@ -33,10 +33,11 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Callable
 
-from toml_compat import parse_toml, toml_backend
+from toml_parse import parse_toml, toml_backend
 
 VERSION = "1.3"
 MIB = 1 << 20
+DEFAULT_DOWNLOAD_DIR = "/root"
 
 
 FROZEN = getattr(sys, "frozen", False)
@@ -59,7 +60,19 @@ class RelayError(RuntimeError):
     pass
 
 
+_active_reporter: "ProgressReporter | None" = None
+
+
+def finish_progress_line() -> None:
+    # Status lines are written with a bare "\r" and no newline, so any other
+    # output must close the line first or it would be appended to it.
+    reporter = _active_reporter
+    if reporter is not None:
+        reporter.end()
+
+
 def log(msg: str) -> None:
+    finish_progress_line()
     print(f"[git-relay] {msg}", flush=True)
 
 
@@ -75,6 +88,7 @@ def configure_stdio() -> None:
 
 
 def warn(msg: str) -> None:
+    finish_progress_line()
     print(f"[git-relay] warning: {msg}", file=sys.stderr, flush=True)
 
 
@@ -128,24 +142,46 @@ class ProgressReporter:
         self._tty = sys.stderr.isatty()
         self._active = False
         self._lock = threading.Lock()
+        self._last_width = 0
+        columns = shutil.get_terminal_size(fallback=(80, 24)).columns or 80
+        self._width = max(20, columns - 1)
+        global _active_reporter
+        _active_reporter = self
 
     def update(self, message: str, force: bool = False) -> None:
         with self._lock:
             if not force and not self._bucket.take():
                 return
             if self._tty:
-                sys.stderr.write(f"\r[git-relay] {message}")
-                sys.stderr.flush()
-                self._active = True
+                self._write_status(f"[git-relay] {message}")
             else:
                 print(f"[git-relay] {message}", file=sys.stderr, flush=True)
 
+    def write_line(self, text: str) -> None:
+        with self._lock:
+            self._finish_locked()
+            sys.stderr.write(f"{text}\n")
+            sys.stderr.flush()
+
     def end(self) -> None:
         with self._lock:
-            if self._active:
-                sys.stderr.write("\n")
-                sys.stderr.flush()
-                self._active = False
+            self._finish_locked()
+
+    def _write_status(self, line: str) -> None:
+        if len(line) > self._width:
+            line = line[:self._width]
+        padding = " " * max(0, self._last_width - len(line))
+        sys.stderr.write(f"\r{line}{padding}")
+        sys.stderr.flush()
+        self._last_width = len(line)
+        self._active = True
+
+    def _finish_locked(self) -> None:
+        if self._active:
+            sys.stderr.write("\n")
+            sys.stderr.flush()
+            self._active = False
+            self._last_width = 0
 
 
 def _as_int(value: object, what: str) -> int:
@@ -185,8 +221,9 @@ def load_config(path: Path) -> tuple[Remote, CloneOptions]:
                      "clone.jobs"),
         remote_git=os.environ.get("GIT_RELAY_REMOTE_GIT",
                                   str(c.get("remote_git", "git"))),
-        download_dir=os.environ.get("GIT_RELAY_DOWNLOAD_DIR",
-                                    str(c.get("download_dir", ""))).strip(),
+        download_dir=os.environ.get(
+            "GIT_RELAY_DOWNLOAD_DIR",
+            str(c.get("download_dir", DEFAULT_DOWNLOAD_DIR))).strip(),
     )
     if remote.backend not in {"auto", "openssh", "paramiko"}:
         raise RelayError(
@@ -490,9 +527,7 @@ class StderrForwarder:
                 f"clone: {message}",
                 force=percent >= 100 or "done" in detail)
             return
-        self.progress.end()
-        sys.stderr.write(f"{text}\n")
-        sys.stderr.flush()
+        self.progress.write_line(text)
 
     def _parse(self, line: str) -> None:
         for token in line.split():
@@ -1069,9 +1104,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         return check(remote, args.verbose)
     except KeyboardInterrupt:
+        finish_progress_line()
         print("\n[git-relay] interrupted", file=sys.stderr)
         return 130
     except RelayError as exc:
+        finish_progress_line()
         print(f"[git-relay] error: {exc}", file=sys.stderr)
         return 1
 
