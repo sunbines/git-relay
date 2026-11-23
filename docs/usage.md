@@ -139,6 +139,8 @@ mv /tmp/git-relay.toml conf/git-relay.toml
 
 子模块在远端一并下载并检出，本地不会再访问 GitHub。
 
+如果目标目录已经是 Git 仓库，`clone` 不会覆盖它，而是提示改用 `fetch` 或 `pull` 更新已有仓库；需要重新克隆时请指定其他目标目录。
+
 如果最初没有加 `--recurse-submodules`，可以在已有仓库中单独补齐子模块：
 
 ```bash

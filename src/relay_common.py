@@ -419,6 +419,11 @@ def local_checkout(repo: Path, options: CloneOptions) -> None:
 
 def prepare_stage(dest: Path) -> Path:
     if dest.exists():
+        if dest.is_dir() and (dest / ".git").exists():
+            raise RelayError(
+                f"destination already contains a Git repository: {dest}; "
+                f"update it with 'git-relay fetch {dest}' or fast-forward it "
+                f"with 'git-relay pull {dest}', or choose another destination")
         if not dest.is_dir() or any(dest.iterdir()):
             raise RelayError(f"destination exists and is not empty: {dest}")
         dest.rmdir()
