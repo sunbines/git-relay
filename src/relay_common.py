@@ -21,19 +21,7 @@ MIB = 1 << 20
 DEFAULT_DOWNLOAD_DIR = "/root"
 PASSWORD_ENV = "GIT_RELAY_PASSWORD"
 
-FROZEN = getattr(sys, "frozen", False)
-
-
-def app_dir() -> Path:
-    # In PyInstaller one-file mode __file__ lives in a temporary extraction
-    # directory, so keep the config next to the executable.
-    if FROZEN:
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent.parent
-
-
-HERE = app_dir()
-DEFAULT_CONFIG = HERE / "git-relay.toml" if FROZEN else HERE / "conf" / "git-relay.toml"
+DEFAULT_CONFIG = Path("/etc/git-relay/git-relay.toml")
 
 
 class RelayError(RuntimeError):

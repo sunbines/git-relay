@@ -61,8 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
         ))
     parser.add_argument(
         "-c", "--config", default=str(DEFAULT_CONFIG),
-        help="TOML config file (source default: conf/git-relay.toml; "
-             "exe default: git-relay.toml next to the executable)")
+        help="TOML config file (default: /etc/git-relay/git-relay.toml)")
     parser.add_argument("--ssh-backend", choices=["auto", "openssh", "paramiko"],
                         help="SSH implementation (default: auto)")
     parser.add_argument("--verbose", action="store_true",

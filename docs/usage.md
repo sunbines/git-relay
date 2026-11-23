@@ -24,24 +24,22 @@ python src\git_relay.py gui
 
 然后点击 **测试连接** 或 **开始克隆**，日志会实时显示在窗口中（进度格式见下文“进度输出”）。
 
-**保存设置（不含密码）** 会把服务器、用户、端口、私钥和克隆选项写入当前配置文件：
-
-- 源码运行时：`conf/git-relay.toml`
-- exe 运行时：exe 同目录的 `git-relay.toml`
+**保存设置（不含密码）** 会把服务器、用户、端口、私钥和克隆选项写入配置文件 `/etc/git-relay/git-relay.toml`（可用 `-c/--config` 指定其他路径）。普通用户通常没有 `/etc/git-relay` 的写权限，可以以 root 运行，或用 `-c` 指定可写路径。
 
 密码不会落盘。下次启动需要重新输入，或设置 `GIT_RELAY_PASSWORD` 环境变量。
 
-启动失败时会弹出提示，详细堆栈写入配置文件同目录的 `git-relay-error.log`。
+启动失败时会弹出提示，详细堆栈写入 `git-relay-error.log`（源码运行在仓库根目录，exe 运行在 exe 同目录）。
 
 ## Linux 配置文件
 
-在仓库根目录执行：
+安装脚本会把模板复制到 `/etc/git-relay/git-relay.toml`。如果跳过了安装，手动创建：
 
 ```bash
-cp conf/git-relay.toml.example conf/git-relay.toml
+sudo mkdir -p /etc/git-relay
+sudo cp conf/git-relay.toml.example /etc/git-relay/git-relay.toml
 ```
 
-编辑 `conf/git-relay.toml`：
+编辑 `/etc/git-relay/git-relay.toml`：
 
 ```toml
 [remote]
@@ -64,7 +62,7 @@ download_dir = "/root"   # 默认下载目录
 export GIT_RELAY_PASSWORD='你的密码'
 ```
 
-`conf/git-relay.toml` 已被 `.gitignore` 忽略，不会提交到仓库。
+`/etc/git-relay/git-relay.toml` 由 root 管理，卸载时不会删除。
 
 Linux 下也可以使用图形界面（需要图形环境和 `tkinter`）：
 
@@ -81,15 +79,17 @@ Linux 下也可以使用图形界面（需要图形环境和 `tkinter`）：
 git-relay --version
 ```
 
-脚本会把 [`script/git-relay`](../script/git-relay) 链接到 PATH：
+脚本会把 [`script/git-relay`](../script/git-relay) 链接到 PATH，并把配置模板复制到 `/etc/git-relay/git-relay.toml`：
 
 - root 用户默认安装到 `/usr/local/bin`。
 - 普通用户默认安装到 `~/.local/bin`。
 - 用 `--prefix DIR` 可以安装到 `DIR/bin`。
-- 用 `--uninstall` 卸载（不会删除 `conf/git-relay.toml`）；配合 `--build` 同时删除 `.build-venv`、`build`、`dist` 和 `__pycache__`。
+- 用 `--uninstall` 卸载（不会删除 `/etc/git-relay/git-relay.toml`）；配合 `--build` 同时删除 `.build-venv`、`build`、`dist` 和 `__pycache__`。
 - 用 `--force` 覆盖同名文件，或删除不是本仓库安装的同名文件。
 
-如果 `~/.local/bin` 不在 `PATH`，脚本会打印需要添加的 `export PATH=...`。安装的是指向本仓库的符号链接，仓库移动后需要重新执行安装脚本；不安装时仍可使用 `./script/git-relay`。配置默认读取仓库中的 `conf/git-relay.toml`，与当前工作目录无关。
+配置模板只在目标文件不存在时复制，不会覆盖已有配置。普通用户安装时，如果无权写 `/etc/git-relay`，脚本会尝试用 `sudo` 创建目录并复制模板；没有 `sudo` 时会打印手动执行的命令。
+
+如果 `~/.local/bin` 不在 `PATH`，脚本会打印需要添加的 `export PATH=...`。安装的是指向本仓库的符号链接，仓库移动后需要重新执行安装脚本；不安装时仍可使用 `./script/git-relay`。配置默认读取 `/etc/git-relay/git-relay.toml`，与当前工作目录无关。
 
 Windows 使用打包后的 `git-relay.cmd` 或 exe，不需要这个脚本。
 
@@ -106,7 +106,7 @@ git-relay config > /tmp/git-relay.toml
 ```bash
 git-relay config > /tmp/git-relay.toml
 # 检查后替换
-mv /tmp/git-relay.toml conf/git-relay.toml
+sudo mv /tmp/git-relay.toml /etc/git-relay/git-relay.toml
 ```
 
 ## 命令行用法
@@ -242,8 +242,7 @@ python3 src/git_relay.py check
 
 默认配置文件位置：
 
-- 源码运行：`conf/git-relay.toml`
-- exe 运行：exe 同目录 `git-relay.toml`
+- 源码运行和打包运行：`/etc/git-relay/git-relay.toml`
 
 可以用 `-c/--config` 指定其他路径。
 

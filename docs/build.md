@@ -57,7 +57,8 @@ PyInstaller 配置放在 `packaging/`：
 
 ## 注意
 
-- 图形界面保存的 `git-relay.toml` 在 exe 旁边，且不包含密码。
+- 图形界面保存到 `/etc/git-relay/git-relay.toml`（Windows 下为当前盘符的 `\etc\git-relay\`），且不包含密码；可用 `-c/--config` 指定其他路径。
+- Windows 首次使用前，把 `dist\git-relay.toml.example` 复制为 `\etc\git-relay\git-relay.toml`（需要管理员权限），或通过 `git-relay-cli.exe -c 路径` 使用指定配置文件。
 - 本机仍需安装 Git for Windows，用于本地 `git checkout`。
 - 单文件 exe 首次启动会解压到临时目录，启动稍慢属正常现象。
 - 未签名的 PyInstaller exe 可能触发 Windows Defender 误报，发布时建议做代码签名。

@@ -2,7 +2,7 @@
 
 ## 提示“未配置 SSH 服务器地址”
 
-Windows 请打开图形界面填写服务器和用户；Linux 请检查 `conf/git-relay.toml`，或设置：
+Windows 请打开图形界面填写服务器和用户；Linux 请检查 `/etc/git-relay/git-relay.toml`，或设置：
 
 ```bash
 export GIT_RELAY_HOST='your-server.example.com'

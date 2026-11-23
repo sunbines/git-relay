@@ -5,7 +5,7 @@
 同一份 Python 代码可在 **Windows 11** 和 **Linux** 上运行：
 
 - **Windows 11**：双击 GUI 版本，填写服务器、端口、用户和密码。
-- **Linux**：在 `conf/git-relay.toml` 或环境变量中配置服务器信息，使用命令行。
+- **Linux**：在 `/etc/git-relay/git-relay.toml` 或环境变量中配置服务器信息，使用命令行。
 - 服务器地址、用户和密码不写死在代码里。
 
 ## 特性
@@ -48,6 +48,8 @@ dist\git-relay-cli.exe check
 dist\git-relay.cmd clone --depth 1 https://github.com/ceph/ceph.git ceph
 ```
 
+配置文件默认位于 `/etc/git-relay/git-relay.toml`（Windows 下为当前盘符的 `\etc\git-relay\`）；可用 `-c/--config` 指定其他路径。
+
 从源码启动 GUI：
 
 ```powershell
@@ -60,18 +62,24 @@ python src\git_relay.py gui
 
 ```bash
 ./setup-git-relay.sh
-git-relay config > /tmp/git-relay.toml
-mv /tmp/git-relay.toml conf/git-relay.toml
-# 编辑 conf/git-relay.toml，填入服务器和用户
+sudoedit /etc/git-relay/git-relay.toml
+# 填入服务器和用户
 export GIT_RELAY_PASSWORD='你的密码'
 
 git-relay check
 git-relay clone --depth 1 https://github.com/ceph/ceph.git ceph
 ```
 
-`git-relay config` 输出当前生效的配置（配置文件 + 环境变量 + 默认值），可直接作为 TOML 文件使用；密码不会写入输出，请使用 `GIT_RELAY_PASSWORD`。先输出到临时文件再替换，避免 shell 重定向提前截断正在读取的配置。
+安装脚本会把配置模板复制到 `/etc/git-relay/git-relay.toml`（已存在则不覆盖）；普通用户安装时，若无写权限会尝试用 `sudo` 创建目录并复制模板。
 
-`setup-git-relay.sh` 会把命令链接到 PATH：root 用户默认 `/usr/local/bin`，普通用户默认 `~/.local/bin`；可用 `--prefix DIR` 指定其他位置。运行 `./setup-git-relay.sh --uninstall` 卸载（不会删除 `conf/git-relay.toml`），加 `--build` 同时清理 `.build-venv`、`build`、`dist` 和 Python 缓存。不安装时也可以继续用 `./script/git-relay`。
+`git-relay config` 输出当前生效的配置（配置文件 + 环境变量 + 默认值），可直接作为 TOML 文件使用；密码不会写入输出，请使用 `GIT_RELAY_PASSWORD`。先输出到临时文件再替换，避免 shell 重定向提前截断正在读取的配置：
+
+```bash
+git-relay config > /tmp/git-relay.toml
+sudo mv /tmp/git-relay.toml /etc/git-relay/git-relay.toml
+```
+
+`setup-git-relay.sh` 会把命令链接到 PATH：root 用户默认 `/usr/local/bin`，普通用户默认 `~/.local/bin`；可用 `--prefix DIR` 指定其他位置。运行 `./setup-git-relay.sh --uninstall` 卸载（不会删除 `/etc/git-relay/git-relay.toml`），加 `--build` 同时清理 `.build-venv`、`build`、`dist` 和 Python 缓存。不安装时也可以继续用 `./script/git-relay`。
 
 完整用法见 [docs/usage.md](docs/usage.md)。
 
