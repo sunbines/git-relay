@@ -40,7 +40,6 @@ dist\
   git-relay.exe          图形界面（无控制台）
   git-relay-cli.exe      命令行版本
   git-relay.cmd          自动选择 GUI/CLI 的入口
-  gr.cmd                 同上，短别名
   git-relay.toml.example
   README.md
 ```

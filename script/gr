@@ -1,4 +1,0 @@
-#!/bin/sh
-# Short alias for git-relay.
-HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec python3 "$HERE/../src/git_relay.py" "$@"

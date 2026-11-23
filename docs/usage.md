@@ -8,8 +8,6 @@
 script\git-relay.cmd
 ```
 
-短别名：`script\gr.cmd`，参数完全相同。
-
 或：
 
 ```powershell
@@ -74,14 +72,43 @@ Linux 下也可以使用图形界面（需要图形环境和 `tkinter`）：
 ./script/git-relay gui
 ```
 
-## 命令行用法
+## 安装 git-relay 命令
 
-Linux 下可以用短别名 `./script/gr` 代替 `./script/git-relay`；把 `script` 目录加入 `PATH` 后可以直接使用 `gr`：
+在仓库根目录执行：
 
 ```bash
-export PATH="$PWD/script:$PATH"
-gr check
+./install.sh
+git-relay --version
 ```
+
+脚本会把 [`script/git-relay`](../script/git-relay) 链接到 PATH：
+
+- root 用户默认安装到 `/usr/local/bin`。
+- 普通用户默认安装到 `~/.local/bin`。
+- 用 `--prefix DIR` 可以安装到 `DIR/bin`。
+- 用 `--uninstall` 删除已安装的命令；`--force` 覆盖同名文件。
+
+如果 `~/.local/bin` 不在 `PATH`，脚本会打印需要添加的 `export PATH=...`。安装的是指向本仓库的符号链接，仓库移动后需要重新执行安装脚本；不安装时仍可使用 `./script/git-relay`。配置默认读取仓库中的 `conf/git-relay.toml`，与当前工作目录无关。
+
+Windows 使用打包后的 `git-relay.cmd` 或 exe，不需要这个脚本。
+
+## 生成配置文件
+
+```bash
+git-relay config > /tmp/git-relay.toml
+```
+
+命令把当前生效的配置输出为 TOML（配置文件 + 环境变量 + 默认值），可直接作为配置文件使用。密码不会写入输出，请使用 `GIT_RELAY_PASSWORD` 环境变量；没有配置文件时，`host` 和 `user` 使用占位符。
+
+如果目标配置文件已存在，先输出到临时文件再替换，避免 shell 重定向提前截断正在读取的配置：
+
+```bash
+git-relay config > /tmp/git-relay.toml
+# 检查后替换
+mv /tmp/git-relay.toml conf/git-relay.toml
+```
+
+## 命令行用法
 
 先检查本机和远端环境：
 
@@ -167,8 +194,6 @@ script\git-relay.cmd check
 script\git-relay.cmd clone --depth 1 https://github.com/ceph/ceph.git ceph
 script\git-relay.cmd submodules ceph
 ```
-
-短别名 `script\gr.cmd` 参数相同，例如 `script\gr.cmd fetch ceph`。
 
 打包后也可以直接使用命令行版本：
 

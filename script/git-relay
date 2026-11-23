@@ -1,3 +1,12 @@
 #!/bin/sh
-HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec python3 "$HERE/../src/git_relay.py" "$@"
+self=$0
+while [ -L "$self" ]; do
+    dir=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)
+    target=$(readlink "$self")
+    case "$target" in
+        /*) self=$target ;;
+        *) self=$dir/$target ;;
+    esac
+done
+here=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)
+exec python3 "$here/../src/git_relay.py" "$@"

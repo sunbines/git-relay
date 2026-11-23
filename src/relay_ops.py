@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import importlib.util
 import os
 import shlex
@@ -29,7 +30,44 @@ from relay_common import (
     run_local_stream,
     warn,
 )
-from relay_ssh import make_runner, resolve_backend, validate_remote
+from relay_ssh import Runner, make_runner, resolve_backend, validate_remote
+
+SSH_DISCONNECT_EXIT = 255
+TRANSFER_ATTEMPTS = 2
+CONNECTION_ERRNOS = {
+    errno.ECONNABORTED, errno.ECONNRESET, errno.EPIPE, errno.ETIMEDOUT,
+    errno.ENETDOWN, errno.ENETRESET, errno.ENETUNREACH, errno.EHOSTUNREACH,
+}
+
+
+def ssh_connection_lost(rc: int) -> bool:
+    # OpenSSH exits 255; Paramiko reports a negative status when the channel
+    # closes without an exit code.
+    return rc == SSH_DISCONNECT_EXIT or rc < 0
+
+
+def transfer_with_retry(runner: Runner, command: str, path: Path,
+                        label: str) -> int:
+    """Retry once when the SSH transport drops mid-transfer."""
+    for attempt in range(1, TRANSFER_ATTEMPTS + 1):
+        last = attempt == TRANSFER_ATTEMPTS
+        try:
+            rc = runner.download(command, path)
+        except (OSError, EOFError) as exc:
+            if isinstance(exc, OSError) and exc.errno not in CONNECTION_ERRNOS:
+                raise
+            reason = str(exc) or type(exc).__name__
+            if last:
+                raise RelayError(
+                    f"SSH connection lost while {label}: {reason}") from exc
+            warn(f"SSH connection lost while {label} ({reason}); "
+                 f"retrying ({attempt + 1}/{TRANSFER_ATTEMPTS})")
+            continue
+        if not ssh_connection_lost(rc) or last:
+            return rc
+        warn(f"SSH connection lost while {label} (exit {rc}); "
+             f"retrying ({attempt + 1}/{TRANSFER_ATTEMPTS})")
+    raise AssertionError("unreachable")
 
 
 def remote_clone_command(url: str, options: CloneOptions) -> str:
@@ -197,8 +235,14 @@ def clone(url: str, dest: Path, remote: Remote, options: CloneOptions,
                 archive = Path(tmp) / "repo.tar.gz"
                 log(f"cloning {url} via "
                     f"{remote.user}@{remote.host}:{remote.port}")
-                rc = runner.download(command, archive)
+                rc = transfer_with_retry(runner, command, archive, "cloning")
                 if rc != 0:
+                    if ssh_connection_lost(rc):
+                        raise RelayError(
+                            f"remote clone failed: SSH connection lost "
+                            f"(exit {rc}) after {TRANSFER_ATTEMPTS} attempts; "
+                            f"retry later or reduce the transfer with "
+                            f"--depth 1")
                     raise RelayError(
                         f"remote clone failed (exit {rc}); check the URL, "
                         f"network, and remote git")
@@ -272,12 +316,18 @@ def fetch_submodules(dest: Path, remote: Remote, options: CloneOptions,
             archive = Path(tmp) / "submodules.tar.gz"
             log(f"fetching submodules for {repo} via "
                 f"{remote.user}@{remote.host}:{remote.port}")
-            rc = runner.download(command, archive)
+            rc = transfer_with_retry(runner, command, archive,
+                                     "fetching submodules")
             if rc == 4:
                 raise RelayError(
                     "the local HEAD commit is not present on the remote; "
                     "push your commits first")
             if rc != 0:
+                if ssh_connection_lost(rc):
+                    raise RelayError(
+                        f"remote submodule fetch failed: SSH connection lost "
+                        f"(exit {rc}) after {TRANSFER_ATTEMPTS} attempts; "
+                        f"retry later")
                 raise RelayError(
                     f"remote submodule fetch failed (exit {rc}); check the "
                     f"repository URL and remote network")
@@ -366,11 +416,16 @@ def relay_fetch(repo: Path, remote: Remote, git: GitOptions, name: str,
         log(f"fetching {name} via {remote.user}@{remote.host}:{remote.port}")
         with tempfile.TemporaryDirectory(prefix="git-relay-") as tmp:
             bundle = Path(tmp) / "fetch.bundle"
-            rc = runner.download(command, bundle)
+            rc = transfer_with_retry(runner, command, bundle, "fetching")
             if rc == 3:
                 log(f"already up to date: {repo}")
                 return False
             if rc != 0:
+                if ssh_connection_lost(rc):
+                    raise RelayError(
+                        f"remote fetch failed: SSH connection lost "
+                        f"(exit {rc}) after {TRANSFER_ATTEMPTS} attempts; "
+                        f"retry later")
                 raise RelayError(
                     f"remote fetch failed (exit {rc}); check the remote URL, "
                     f"network, and remote git")

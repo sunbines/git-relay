@@ -276,6 +276,53 @@ def load_config(path: Path) -> tuple[Remote, CloneOptions, GitOptions]:
     return remote, options, git
 
 
+def _toml_string(value: str) -> str:
+    escaped = (value.replace("\\", "\\\\")
+                    .replace('"', '\\"')
+                    .replace("\n", "\\n")
+                    .replace("\r", "\\r")
+                    .replace("\t", "\\t"))
+    return f'"{escaped}"'
+
+
+def render_config(remote: Remote, options: CloneOptions,
+                  git: GitOptions) -> str:
+    host = remote.host or "your-server.example.com"
+    user = remote.user or "your-user"
+    recurse = "true" if options.recurse_submodules else "false"
+    lines = [
+        "# git-relay configuration",
+        "# The password is never written here; set GIT_RELAY_PASSWORD instead.",
+        "",
+        "[remote]",
+        f"host = {_toml_string(host)}",
+        f"user = {_toml_string(user)}",
+        f"port = {remote.port}",
+    ]
+    if remote.key:
+        lines.append(f"key = {_toml_string(remote.key)}")
+    else:
+        lines.append('# key = "~/.ssh/id_ed25519"')
+    lines += [
+        f"ssh_backend = {_toml_string(remote.backend)}",
+        "",
+        "[clone]",
+        f"depth = {options.depth}",
+        f"branch = {_toml_string(options.branch)}",
+        f"recurse_submodules = {recurse}",
+        f"jobs = {options.jobs}",
+        f"remote_git = {_toml_string(options.remote_git)}",
+        f"download_dir = {_toml_string(options.download_dir)}",
+        "",
+        "[git]",
+        f"mode = {_toml_string(git.mode)}",
+        f"remote = {_toml_string(git.remote)}",
+        f"cache_dir = {_toml_string(git.cache_dir)}",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def run_local(cmd: list[str], cwd: Path | None = None,
               check: bool = True) -> subprocess.CompletedProcess:
     env = os.environ.copy()

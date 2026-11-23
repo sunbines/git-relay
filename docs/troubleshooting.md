@@ -29,6 +29,16 @@ ssh your-user@your-server.example.com \
 
 确认远端能访问目标仓库。
 
+## 传输中途断开（Broken pipe / 退出码 255）
+
+如果日志出现 `client_loop: send disconnect: Broken pipe`，说明 SSH 连接在回传途中被网络或服务端断开，tar 流被截断。工具会自动重试一次；重试会重新在远端 clone，已传输的字节不会续传。
+
+如果仍然失败：
+
+- 大仓库加 `--depth 1`（以及 `--recurse-submodules --shallow-submodules`）减少传输量。
+- 换用更稳定的网络，或检查远端 `sshd` 日志中的断开原因（如会话超时、流量限制）。
+- 确认没有中间设备按流量或时长切断长连接。
+
 ## Windows 解压时报符号链接错误
 
 启用 Windows 开发者模式，或用管理员终端运行。也可以先不加“同时拉取子模块”，避免回传包含大量符号链接的工作区。

@@ -27,6 +27,7 @@ from relay_common import (
     configure_stdio,
     finish_progress_line,
     load_config,
+    render_config,
     resolve_dest,
 )
 from relay_ops import (
@@ -48,6 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Examples:\n"
             "  python src/git_relay.py gui\n"
             "  python src/git_relay.py check\n"
+            "  python src/git_relay.py config > git-relay.toml\n"
             "  python src/git_relay.py clone https://github.com/ceph/ceph.git\n"
             "  python src/git_relay.py clone --depth 1 URL ceph\n"
             "  python src/git_relay.py clone --recurse-submodules URL\n"
@@ -74,6 +76,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_check = sub.add_parser(
         "check", help="check local/remote dependencies and SSH connectivity")
     p_check.set_defaults(func="check")
+
+    p_config = sub.add_parser(
+        "config", help="print the effective configuration as TOML")
+    p_config.set_defaults(func="config")
 
     p_clone = sub.add_parser(
         "clone", help="clone on the remote host and transfer to local")
@@ -170,6 +176,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "check":
             return check(remote, args.verbose)
+        if args.command == "config":
+            print(render_config(remote, options, git), end="")
+            return 0
         sync = {"fetch": fetch_remote, "pull": pull_remote,
                 "push": push_remote}[args.command]
         sync(Path(args.dest).expanduser(), remote, options, git,

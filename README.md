@@ -27,6 +27,7 @@ git-relay/
 ├── src/                 Python 源码
 ├── docs/                详细文档
 ├── script/              启动和打包脚本
+├── install.sh           安装命令到 PATH
 ├── conf/                配置模板
 ├── packaging/           PyInstaller 打包配置
 ├── README.md
@@ -39,13 +40,12 @@ git-relay/
 
 构建后双击 `dist\git-relay.exe`，只打开图形界面，不会弹出 PowerShell 或控制台。
 
-命令行使用 `dist\git-relay-cli.exe`，或使用自动分发的 `dist\git-relay.cmd`（短别名 `gr.cmd`）：
+命令行使用 `dist\git-relay-cli.exe`，或使用自动分发的 `dist\git-relay.cmd`：
 
 ```bat
 dist\git-relay.exe
 dist\git-relay-cli.exe check
 dist\git-relay.cmd clone --depth 1 https://github.com/ceph/ceph.git ceph
-dist\gr.cmd fetch ceph
 ```
 
 从源码启动 GUI：
@@ -59,20 +59,19 @@ python src\git_relay.py gui
 ### Linux
 
 ```bash
-cp conf/git-relay.toml.example conf/git-relay.toml
+./install.sh
+git-relay config > /tmp/git-relay.toml
+mv /tmp/git-relay.toml conf/git-relay.toml
 # 编辑 conf/git-relay.toml，填入服务器和用户
 export GIT_RELAY_PASSWORD='你的密码'
 
-./script/git-relay check
-./script/git-relay clone --depth 1 https://github.com/ceph/ceph.git ceph
+git-relay check
+git-relay clone --depth 1 https://github.com/ceph/ceph.git ceph
 ```
 
-也可以使用短别名 `./script/gr`（Windows 为 `script\gr.cmd`）。把 `script` 目录加入 `PATH` 后，直接敲 `gr check` 即可：
+`git-relay config` 输出当前生效的配置（配置文件 + 环境变量 + 默认值），可直接作为 TOML 文件使用；密码不会写入输出，请使用 `GIT_RELAY_PASSWORD`。先输出到临时文件再替换，避免 shell 重定向提前截断正在读取的配置。
 
-```bash
-export PATH="$PWD/script:$PATH"
-gr fetch ceph
-```
+`install.sh` 会把命令链接到 PATH：root 用户默认 `/usr/local/bin`，普通用户默认 `~/.local/bin`；可用 `--prefix DIR` 指定其他位置，`--uninstall` 删除。不安装时也可以继续用 `./script/git-relay`。
 
 完整用法见 [docs/usage.md](docs/usage.md)。
 
@@ -84,7 +83,7 @@ gr fetch ceph
 - 密码登录建议安装 Paramiko：openEuler 可执行 `dnf install python3-paramiko`，也可使用 `python3 -m pip install paramiko`
 - Linux 图形界面需要 `tkinter`，命令行不需要；openEuler 可安装 `python3-devel`，Debian/Ubuntu 为 `python3-tk`
 
-配置好远端后，运行 `./script/git-relay check` 可检查本地 Python 模块、`git`/`ssh` 以及远端所需命令是否齐全。
+配置好远端后，运行 `git-relay check`（或 `./script/git-relay check`）可检查本地 Python 模块、`git`/`ssh` 以及远端所需命令是否齐全。
 
 ## 文档
 

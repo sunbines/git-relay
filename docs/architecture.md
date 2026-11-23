@@ -60,6 +60,7 @@ sequenceDiagram
 - 回传阶段按已接收字节数计算实时速度；本地 checkout 完成后统计目标目录大小。
 - 所有进度刷新都经过令牌桶限流（默认 4 次/秒，容量 2）：终端中原地刷新一行，非终端环境（GUI、重定向）逐行输出。
 - Paramiko 后端直接读取 SSH 通道的 stderr，OpenSSH 后端使用 `read1`，避免缓冲区等待导致进度滞后。
+- SSH 传输中断时（OpenSSH 退出码 255 或 socket 连接错误），clone、子模块回传和 relay fetch 会自动重试一次；重试会重新执行远端 clone，已传输的字节不会续传。
 
 ## SSH 后端
 
