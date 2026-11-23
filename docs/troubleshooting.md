@@ -13,7 +13,7 @@ export GIT_RELAY_PASSWORD='你的密码'
 ## SSH 连接失败 / Permission denied
 
 ```bash
-python3 src/git_relay.py check
+git-relay check
 ```
 
 确认服务器地址、用户、端口、密码或私钥正确。Windows 密码登录建议安装 Paramiko，或使用已内置 Paramiko 的 exe；Linux 可安装 `python3-paramiko`，也可以继续使用 OpenSSH 后端。

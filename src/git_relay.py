@@ -7,10 +7,10 @@ Useful when direct access to GitHub from this machine is slow but an
 internet-facing host is available.
 
 Examples:
-    python src/git_relay.py gui
-    python src/git_relay.py clone https://github.com/ceph/ceph.git ceph --depth 1
-    python src/git_relay.py clone --recurse-submodules https://github.com/ceph/ceph.git
-    python src/git_relay.py check
+    git-relay gui
+    git-relay clone https://github.com/ceph/ceph.git ceph --depth 1
+    git-relay clone --recurse-submodules https://github.com/ceph/ceph.git
+    git-relay check
 """
 
 from __future__ import annotations
@@ -42,21 +42,22 @@ from relay_ops import (
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
+        prog="git-relay",
         description="Clone Git repositories through a remote Linux host "
                     "and transfer them back",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  python src/git_relay.py gui\n"
-            "  python src/git_relay.py check\n"
-            "  python src/git_relay.py config > git-relay.toml\n"
-            "  python src/git_relay.py clone https://github.com/ceph/ceph.git\n"
-            "  python src/git_relay.py clone --depth 1 URL ceph\n"
-            "  python src/git_relay.py clone --recurse-submodules URL\n"
-            "  python src/git_relay.py submodules ceph\n"
-            "  python src/git_relay.py fetch ceph\n"
-            "  python src/git_relay.py pull ceph --branch main\n"
-            "  python src/git_relay.py push ceph --mode direct\n"
+            "  git-relay gui\n"
+            "  git-relay check\n"
+            "  git-relay config > git-relay.toml\n"
+            "  git-relay clone https://github.com/ceph/ceph.git\n"
+            "  git-relay clone --depth 1 URL ceph\n"
+            "  git-relay clone --recurse-submodules URL\n"
+            "  git-relay submodules ceph\n"
+            "  git-relay fetch ceph\n"
+            "  git-relay pull ceph --branch main\n"
+            "  git-relay push ceph --mode direct\n"
         ))
     parser.add_argument(
         "-c", "--config", default=str(DEFAULT_CONFIG),
