@@ -8,6 +8,8 @@
 script\git-relay.cmd
 ```
 
+短别名：`script\gr.cmd`，参数完全相同。
+
 或：
 
 ```powershell
@@ -73,6 +75,13 @@ Linux 下也可以使用图形界面（需要图形环境和 `tkinter`）：
 ```
 
 ## 命令行用法
+
+Linux 下可以用短别名 `./script/gr` 代替 `./script/git-relay`；把 `script` 目录加入 `PATH` 后可以直接使用 `gr`：
+
+```bash
+export PATH="$PWD/script:$PATH"
+gr check
+```
 
 先检查本机和远端环境：
 
@@ -158,6 +167,8 @@ script\git-relay.cmd check
 script\git-relay.cmd clone --depth 1 https://github.com/ceph/ceph.git ceph
 script\git-relay.cmd submodules ceph
 ```
+
+短别名 `script\gr.cmd` 参数相同，例如 `script\gr.cmd fetch ceph`。
 
 打包后也可以直接使用命令行版本：
 

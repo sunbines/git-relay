@@ -71,9 +71,12 @@ Copy-Item -Force (Join-Path $root "conf\git-relay.toml.example") `
 Copy-Item -Force (Join-Path $root "README.md") (Join-Path $dist "README.md")
 Copy-Item -Force (Join-Path $scriptDir "git-relay.cmd") `
     (Join-Path $dist "git-relay.cmd")
+Copy-Item -Force (Join-Path $scriptDir "gr.cmd") `
+    (Join-Path $dist "gr.cmd")
 
 Write-Host ""
 Write-Host "[build] 完成："
 Write-Host "  $dist\git-relay.exe      （双击打开图形界面，不弹控制台）"
 Write-Host "  $dist\git-relay-cli.exe  （命令行版本）"
+Write-Host "  $dist\git-relay.cmd / gr.cmd  （命令分发，短别名 gr）"
 Write-Host "  $dist\git-relay.toml.example"

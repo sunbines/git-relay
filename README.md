@@ -39,12 +39,13 @@ git-relay/
 
 构建后双击 `dist\git-relay.exe`，只打开图形界面，不会弹出 PowerShell 或控制台。
 
-命令行使用 `dist\git-relay-cli.exe`，或使用自动分发的 `dist\git-relay.cmd`：
+命令行使用 `dist\git-relay-cli.exe`，或使用自动分发的 `dist\git-relay.cmd`（短别名 `gr.cmd`）：
 
 ```bat
 dist\git-relay.exe
 dist\git-relay-cli.exe check
 dist\git-relay.cmd clone --depth 1 https://github.com/ceph/ceph.git ceph
+dist\gr.cmd fetch ceph
 ```
 
 从源码启动 GUI：
@@ -64,6 +65,13 @@ export GIT_RELAY_PASSWORD='你的密码'
 
 ./script/git-relay check
 ./script/git-relay clone --depth 1 https://github.com/ceph/ceph.git ceph
+```
+
+也可以使用短别名 `./script/gr`（Windows 为 `script\gr.cmd`）。把 `script` 目录加入 `PATH` 后，直接敲 `gr check` 即可：
+
+```bash
+export PATH="$PWD/script:$PATH"
+gr fetch ceph
 ```
 
 完整用法见 [docs/usage.md](docs/usage.md)。
