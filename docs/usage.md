@@ -194,6 +194,34 @@ sudo mv /tmp/git-relay.toml /etc/git-relay/git-relay.toml
   https://github.com/example/project.git
 ```
 
+## 命令历史（history）
+
+每次运行 `git-relay` 都会把命令追加到历史文件，`history` 子命令用来回看最近执行过的命令：
+
+```bash
+git-relay history            # 最近 20 条
+git-relay history -n 50      # 最近 50 条
+git-relay history -n 0       # 全部
+git-relay history --path     # 只打印历史文件位置
+git-relay history --clear    # 清空历史
+```
+
+输出形如：
+
+```text
+2026-11-25 21:47:41  git-relay clone --depth 1 https://github.com/ceph/ceph.git ceph
+2026-11-25 21:48:05  git-relay -c /etc/git-relay/git-relay.toml config
+```
+
+默认位置：`$XDG_STATE_HOME/git-relay/history`，未设置时为 `~/.local/state/git-relay/history`；Windows 下为 `%LOCALAPPDATA%\git-relay\history`。可用环境变量 `GIT_RELAY_HISTORY=/path/to/file` 指定其他位置（例如放进项目目录方便排查）。
+
+说明：
+
+- 记录的是命令行参数；带空格的参数以 shell 引号形式保存，可直接复制重跑。历史文件按 `0600` 创建，避免 URL 里的 token 被其他用户读到。
+- `history` 和 `gui` 自身不计入历史。
+- 写入失败（只读家目录、磁盘满）会静默跳过，不影响主命令。
+- 文件超过 1000 条时自动裁剪为最近 500 条。
+
 ## 同步已有仓库（fetch / pull / push）
 
 对本地已有仓库执行网络操作，默认经中转主机访问外网：

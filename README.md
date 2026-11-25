@@ -18,6 +18,7 @@
 - 支持对已有仓库执行 `fetch` / `pull` / `push`，可经中转（增量 bundle）或在本机直接执行。
 - 实时显示远端克隆进度、下载速度、回传速度和最终仓库大小（令牌桶限流刷新）。
 - 支持 Paramiko 和 OpenSSH 两种 SSH 后端。
+- 记录并回看最近执行的命令（`git-relay history`），便于复现操作。
 - 不修改全局 Git 配置，也不在本地启动代理。
 
 ## 目录结构
@@ -68,6 +69,7 @@ export GIT_RELAY_PASSWORD='你的密码'
 
 git-relay check
 git-relay clone --depth 1 https://github.com/ceph/ceph.git ceph
+git-relay history -n 10
 ```
 
 安装脚本会把配置模板复制到 `/etc/git-relay/git-relay.toml`（已存在则不覆盖）；普通用户安装时，若无写权限会尝试用 `sudo` 创建目录并复制模板。

@@ -20,6 +20,7 @@ import os
 import sys
 from pathlib import Path
 
+import relay_history
 from relay_common import (
     DEFAULT_CONFIG,
     VERSION,
@@ -58,6 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  git-relay fetch ceph\n"
             "  git-relay pull ceph --branch main\n"
             "  git-relay push ceph --mode direct\n"
+            "  git-relay history -n 20\n"
         ))
     parser.add_argument(
         "-c", "--config", default=str(DEFAULT_CONFIG),
@@ -80,6 +82,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_config = sub.add_parser(
         "config", help="print the effective configuration as TOML")
     p_config.set_defaults(func="config")
+
+    p_history = sub.add_parser(
+        "history", help="show recently executed git-relay commands")
+    p_history.add_argument(
+        "-n", "--limit", type=int, default=relay_history.DEFAULT_SHOW,
+        help=f"entries to show, 0 for all "
+             f"(default: {relay_history.DEFAULT_SHOW})")
+    p_history.add_argument(
+        "--clear", action="store_true", help="delete the recorded history")
+    p_history.add_argument(
+        "--path", action="store_true",
+        help="print the history file path and exit")
+    p_history.set_defaults(func="history")
 
     p_clone = sub.add_parser(
         "clone", help="clone on the remote host and transfer to local")
@@ -129,6 +144,29 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def show_history(args) -> int:
+    path = relay_history.history_path()
+    if args.path:
+        print(path, flush=True)
+        return 0
+    if args.clear:
+        removed = relay_history.clear(path)
+        if removed:
+            print(f"[git-relay] removed {removed} history entries: {path}",
+                  flush=True)
+        else:
+            print("[git-relay] history is already empty", flush=True)
+        return 0
+    limit = args.limit if args.limit and args.limit > 0 else 0
+    items = relay_history.recent(limit, path)
+    if not items:
+        print("[git-relay] no history yet; run a command first", flush=True)
+        return 0
+    for stamp, command in items:
+        print(f"{stamp}  git-relay {command}", flush=True)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     configure_stdio()
     parser = build_parser()
@@ -146,6 +184,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[git-relay] error: failed to start the GUI: {exc}",
                   file=sys.stderr)
             return 1
+
+    if args.command == "history":
+        return show_history(args)
+
+    # 记录到历史：history 自身不计入，gui 已在上面的分支返回
+    if args.command:
+        relay_history.record(argv if argv is not None else sys.argv[1:])
+
     try:
         remote, options, git = load_config(Path(args.config).expanduser())
         if args.ssh_backend:
