@@ -4,7 +4,7 @@
 
 同一份 Python 代码可在 **Windows 11** 和 **Linux** 上运行：
 
-- **Windows 11**：双击 GUI 版本，填写服务器、端口、用户和密码。
+- **Windows 11**：双击 GUI 版本（Git Bash 终端风格窗口），在底部提示符后输入命令——内置的 `clone` / `check` 之外，`ls`、`grep`、`git`、`ssh` 等 bash 命令直接可用；参数在右键菜单 → Options 中设置。
 - **Linux**：在 `/etc/git-relay/git-relay.toml` 或环境变量中配置服务器信息，使用命令行。
 - 服务器地址、用户和密码不写死在代码里。
 
@@ -38,7 +38,7 @@ git-relay/
 
 ### Windows 11
 
-构建后双击 `dist\git-relay.exe`，只打开图形界面，不会弹出 PowerShell 或控制台。
+构建后双击 `dist\git-relay.exe`，只打开界面，不会弹出 PowerShell 或控制台。主窗口是一扇 Git Bash（mintty）风格的终端：黑底、Consolas 等宽字体、带颜色标记的输出，底部提示符后可直接输入命令（`help` 查看内置命令，上下键翻历史），右键唤出系统原生浅色菜单，服务器与克隆参数在 **Options**（标准 Windows 窗口）中设置。除内置命令外，其它输入直接交给本机 Git Bash 执行，`ls` / `cat` / `grep` / `git` / `ssh` 等命令、管道与重定向都能用。Linux 端仍使用原有命令行，未做改动。
 
 命令行使用 `dist\git-relay-cli.exe`，或使用自动分发的 `dist\git-relay.cmd`：
 

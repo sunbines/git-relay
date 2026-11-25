@@ -1,6 +1,6 @@
 # 使用说明
 
-## Windows 11 图形界面
+## Windows 11 界面（Git Bash 终端风格）
 
 从源码启动：
 
@@ -14,17 +14,48 @@ script\git-relay.cmd
 python src\git_relay.py gui
 ```
 
-打包后直接双击 `dist\git-relay.exe`。这是无控制台的 GUI 版本，不会弹出 PowerShell 窗口。
+打包后直接双击 `dist\git-relay.exe`。这是无控制台的 GUI 版本，不会弹出 PowerShell 窗口，主窗口本身就是一扇 Git Bash（mintty）风格的终端：黑底、Consolas 等宽字体、带颜色标记的输出，底部提示符后可直接输入命令。右键菜单和 **Options** 设置窗口使用系统原生的浅色界面，与终端窗口区分开。Linux 端仍使用原有命令行，不受影响。
 
-界面中填写：
+### 命令
 
-- 服务器、端口、用户、密码（或私钥）
-- 仓库 URL、本地目录
-- 浅克隆深度、分支、是否拉取子模块
+在底部提示符后输入，回车执行：
 
-然后点击 **测试连接** 或 **开始克隆**，日志会实时显示在窗口中（进度格式见下文“进度输出”）。
+| 命令 | 作用 |
+| --- | --- |
+| `help` | 显示内置命令 |
+| `check` / `test` | 测试中转主机连接 |
+| `clone <url> [dest]` | 克隆仓库，省略 `dest` 时自动推导 |
+| `fetch` / `pull` / `push` | 同步 `dest` 指向的已有仓库 |
+| `cd [path]` | 切换目录，支持 `~`、`..`、`-` 和 `/f/repo` 写法；进入 Git 仓库时同步 `dest` |
+| `pwd` | 打印当前目录 |
+| `set <key> [value]` | 查看或设置配置项 |
+| `config` | 打印当前配置 |
+| `save` | 写入配置文件（不含密码） |
+| `options` | 打开设置窗口 |
+| `clear` / `cls` | 清屏 |
+| `shell <cmd>` | 显式交给 Git Bash 执行 |
+| `exit` | 退出 |
 
-**保存设置（不含密码）** 会把服务器、用户、端口、私钥和克隆选项写入配置文件 `/etc/git-relay/git-relay.toml`（可用 `-c/--config` 指定其他路径）。普通用户通常没有 `/etc/git-relay` 的写权限，可以以 root 运行，或用 `-c` 指定可写路径。
+**其它命令不再报“未知命令”，而是交给本机 Git Bash 执行。** 因此 `ls`、`ll`、`cat`、`less`、`grep`、`find`、`cp`、`mv`、`rm`、`mkdir`、`touch`、`chmod`、`git`、`ssh`、`scp`、`tar`、`unzip`、`curl`、`make`、`python`、`ps`、`kill`、`which` 等都能直接敲，并且支持管道、通配符和重定向：
+
+```bash
+ls -la | grep .py
+cd /f/repo && git log --oneline -5
+find . -name "*.toml" | head
+echo hello > note.txt
+```
+
+`cd` 的实际结果会回读并同步到底部提示符。若与内置命令同名（`test`、`set`、`help` 等），在行首加 `!` 强制走 bash，例如 `!test -f README.md`。
+
+需要交互输入的程序（`ssh` 密码提示、`vi`、`top`）依赖真正的 TTY，当前终端不支持，请在本机 Git Bash 窗口里执行。
+
+`set` 支持的配置项：`host`、`port`、`user`、`password`、`key`、`backend`、`url`、`dest`、`depth`、`branch`、`recurse`、`mode`。密码不会回显，也不会写入配置文件。上下方向键翻历史命令；右键菜单提供 Copy / Paste / Clear。
+
+### 设置
+
+右键任意位置唤出菜单，选 **Options** 打开设置窗口，填写 `host`、`port`、`user`、`password`（或 `key`、`backend`）以及 `url`、`dest`、`depth`、`branch`、`recurse-submodules`、`mode`。**[ Apply ]** 保存，**[ Test ]** 测试连接，**[ Clone ]** 开始克隆，**[ Close ]** 关闭。
+
+**[ Apply ]** 会把服务器、用户、端口、私钥和克隆选项（不含密码）写入配置文件 `/etc/git-relay/git-relay.toml`（可用 `-c/--config` 指定其他路径）。普通用户通常没有 `/etc/git-relay` 的写权限，可以以 root 运行，或用 `-c` 指定可写路径。
 
 密码不会落盘。下次启动需要重新输入，或设置 `GIT_RELAY_PASSWORD` 环境变量。
 
