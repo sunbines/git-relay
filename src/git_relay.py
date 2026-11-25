@@ -42,6 +42,7 @@ from relay_ops import (
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser with every subcommand wired to ``args.func``."""
     parser = argparse.ArgumentParser(
         prog="git-relay",
         description="Clone Git repositories through a remote Linux host "
@@ -72,6 +73,8 @@ def build_parser() -> argparse.ArgumentParser:
                         version=f"git-relay {VERSION}")
     sub = parser.add_subparsers(dest="command", required=False)
 
+    # Each subparser stores its command name in ``func``; main() dispatches on
+    # that value, so no handler callables need to be registered here.
     p_gui = sub.add_parser("gui", help="open the GUI (requires tkinter)")
     p_gui.set_defaults(func="gui")
 
@@ -145,6 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def show_history(args) -> int:
+    """Handle the history subcommand: print, clear, or locate the log."""
     path = relay_history.history_path()
     if args.path:
         print(path, flush=True)
@@ -168,6 +172,7 @@ def show_history(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse arguments, dispatch the requested command, and return an exit code."""
     configure_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -188,7 +193,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "history":
         return show_history(args)
 
-    # 记录到历史：history 自身不计入，gui 已在上面的分支返回
+    # History is recorded for every command except history itself, and before
+    # the config is loaded so a broken config still leaves a trace.
     if args.command:
         relay_history.record(argv if argv is not None else sys.argv[1:])
 
@@ -197,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.ssh_backend:
             remote.backend = args.ssh_backend
         if args.command == "clone":
+            # CLI flags override the config file only when explicitly given.
             if args.depth is not None:
                 options.depth = args.depth
             if args.branch:
@@ -233,10 +240,12 @@ def main(argv: list[str] | None = None) -> int:
              dry_run=args.dry_run)
         return 0
     except KeyboardInterrupt:
+        # 130 is the conventional exit status for SIGINT.
         finish_progress_line()
         print("\n[git-relay] interrupted", file=sys.stderr)
         return 130
     except RelayError as exc:
+        # Expected operational failures exit 1; unexpected ones propagate.
         finish_progress_line()
         print(f"[git-relay] error: {exc}", file=sys.stderr)
         return 1

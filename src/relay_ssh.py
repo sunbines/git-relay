@@ -27,14 +27,17 @@ from relay_common import (
 
 
 def read_chunk(stream: BinaryIO, size: int) -> bytes:
+    """Read up to size bytes, using read1 when the stream supports it."""
     reader = getattr(stream, "read1", None)
     return reader(size) if reader is not None else stream.read(size)
 
 
 def stream_download(stream: BinaryIO, path: Path,
                     progress: ProgressReporter) -> None:
+    """Copy a remote stream into path in 1 MiB chunks while reporting throughput."""
     total = 0
     started = time.monotonic()
+    # The source is a pipe of unknown length, so read until EOF instead of seeking.
     with open(path, "wb") as fh:
         while True:
             chunk = read_chunk(stream, MIB)
@@ -43,6 +46,7 @@ def stream_download(stream: BinaryIO, path: Path,
             fh.write(chunk)
             total += len(chunk)
             elapsed = time.monotonic() - started
+            # Report the running average; instantaneous rates are too noisy to read.
             speed = total / elapsed if elapsed > 0 else 0.0
             progress.update(f"transfer {total / MIB:.1f} MiB "
                             f"({speed / MIB:.2f} MiB/s)")
@@ -56,6 +60,7 @@ def stream_download(stream: BinaryIO, path: Path,
 
 def stream_upload(stream: BinaryIO, path: Path,
                   progress: ProgressReporter) -> None:
+    """Copy path into a remote stream in 1 MiB chunks while reporting throughput."""
     total = 0
     started = time.monotonic()
     with open(path, "rb") as fh:
@@ -64,6 +69,8 @@ def stream_upload(stream: BinaryIO, path: Path,
             if not chunk:
                 break
             stream.write(chunk)
+            # Flush per chunk so buffered backends (Paramiko) keep feeding the
+            # remote side.
             stream.flush()
             total += len(chunk)
             elapsed = time.monotonic() - started
@@ -78,6 +85,8 @@ def stream_upload(stream: BinaryIO, path: Path,
 
 
 def validate_remote(remote: Remote) -> None:
+    """Validate and normalize the configured host, user, and port."""
+    # Values come from a hand-edited config, so tolerate accidental whitespace.
     remote.host = remote.host.strip()
     remote.user = remote.user.strip()
     if not remote.host:
@@ -93,41 +102,54 @@ def validate_remote(remote: Remote) -> None:
 
 
 def resolve_backend(remote: Remote) -> str:
+    """Resolve the "auto" backend to paramiko or openssh from the credentials."""
     if remote.backend != "auto":
         return remote.backend
     # Prefer paramiko for password auth to avoid SSH_ASKPASS compatibility
     # issues on Windows.
     if remote.password and importlib.util.find_spec("paramiko") is not None:
         return "paramiko"
+    # Otherwise use the system ssh client, which needs no extra dependency.
     return "openssh"
 
 
 class Runner:
+    """Base class for the SSH backends that run commands and stream files."""
+
     def __init__(self, remote: Remote, verbose: bool = False) -> None:
+        """Store the target and create fresh stats and progress reporting."""
         self.remote = remote
         self.verbose = verbose
         self.stats = RemoteStats()
         self.progress = ProgressReporter()
 
     def close(self) -> None:
-        pass
+        """Release backend resources; the base runner holds none."""
 
     def run_capture(self, command: str) -> tuple[int, str, str]:
+        """Run a remote command and return (exit code, stdout, stderr)."""
         raise NotImplementedError
 
     def download(self, command: str, path: Path) -> int:
+        """Stream the command's stdout into path and return its exit code."""
         raise NotImplementedError
 
     def upload(self, command: str, path: Path) -> int:
+        """Stream path into the command's stdin and return its exit code."""
         raise NotImplementedError
 
 
 class OpenSSHRunner(Runner):
+    """Run remote commands through the local OpenSSH client binary."""
+
     def __init__(self, remote: Remote, verbose: bool = False) -> None:
+        """Build the ssh environment, adding an askpass helper for passwords."""
         super().__init__(remote, verbose)
         self._askpass: tempfile.TemporaryDirectory[str] | None = None
         self.env = os.environ.copy()
         if remote.password:
+            # The password travels in the environment, never in argv, so it cannot
+            # be read from process listings.
             self._askpass = tempfile.TemporaryDirectory(
                 prefix="git-relay-askpass-")
             helper = Path(self._askpass.name) / (
@@ -147,20 +169,24 @@ class OpenSSHRunner(Runner):
                 "SSH_ASKPASS_REQUIRE": "force",
             })
             if os.name != "nt":
+                # OpenSSH on Unix only invokes askpass when DISPLAY is set.
                 self.env.setdefault("DISPLAY", ":0")
 
     def close(self) -> None:
+        """Remove the temporary askpass helper, if one was created."""
         if self._askpass is not None:
             self._askpass.cleanup()
             self._askpass = None
 
     def _command(self, remote_command: str) -> list[str]:
+        """Build the ssh argv for a single remote command string."""
         ssh = shutil.which("ssh")
         if ssh is None:
             raise RelayError(
                 "ssh command not found; please install an OpenSSH client")
         cmd = [
             ssh,
+            # accept-new trusts an unseen host key once, matching AutoAddPolicy.
             "-o", "StrictHostKeyChecking=accept-new",
             "-o", "ConnectTimeout=15",
             "-o", "ServerAliveInterval=30",
@@ -169,21 +195,26 @@ class OpenSSHRunner(Runner):
         if self.remote.key:
             cmd += ["-i", str(Path(self.remote.key).expanduser())]
         if not self.remote.password:
+            # BatchMode fails instead of waiting on a prompt nobody can answer.
             cmd += ["-o", "BatchMode=yes"]
         cmd += [
             "-p", str(self.remote.port),
             f"{self.remote.user}@{self.remote.host}",
+            # A single argv element, so ssh hands it to the remote shell verbatim.
             remote_command,
         ]
         return cmd
 
     def run_capture(self, command: str) -> tuple[int, str, str]:
+        """Run the command once with captured output and return its exit status."""
         proc = subprocess.run(
             self._command(command), capture_output=True, text=True,
             stdin=subprocess.DEVNULL, env=self.env)
         return proc.returncode, proc.stdout, proc.stderr
 
     def download(self, command: str, path: Path) -> int:
+        """Stream ssh stdout into path while a thread forwards stderr."""
+        # Reset stats per transfer so numbers from an earlier run are not reused.
         self.stats = RemoteStats()
         proc = subprocess.Popen(
             self._command(command), stdout=subprocess.PIPE,
@@ -191,6 +222,8 @@ class OpenSSHRunner(Runner):
         assert proc.stdout is not None and proc.stderr is not None
         forwarder = StderrForwarder(self.stats, self.progress)
         reader = getattr(proc.stderr, "read1", proc.stderr.read)
+        # ssh reports progress on stderr; if that pipe is never read it fills and
+        # both the local reader and the remote process stall.
         thread = threading.Thread(
             target=pump_stderr, args=(reader, forwarder), daemon=True)
         thread.start()
@@ -201,11 +234,13 @@ class OpenSSHRunner(Runner):
         rc = proc.wait()
         thread.join(timeout=5)
         forwarder.flush()
+        # Close stderr only after the pump finished, or the reader may fault.
         if not thread.is_alive():
             proc.stderr.close()
         return rc
 
     def upload(self, command: str, path: Path) -> int:
+        """Stream path into ssh stdin while threads forward stderr and drain stdout."""
         self.stats = RemoteStats()
         proc = subprocess.Popen(
             self._command(command), stdin=subprocess.PIPE,
@@ -217,6 +252,7 @@ class OpenSSHRunner(Runner):
         thread = threading.Thread(
             target=pump_stderr, args=(reader, forwarder), daemon=True)
         thread.start()
+        # Drain stdout too: ssh may write there while we are still feeding stdin.
         drain = threading.Thread(
             target=drain_stream, args=(proc.stdout,), daemon=True)
         drain.start()
@@ -239,7 +275,10 @@ class OpenSSHRunner(Runner):
 
 
 class ParamikoRunner(Runner):
+    """Run remote commands over a Paramiko SSH connection."""
+
     def __init__(self, remote: Remote, verbose: bool = False) -> None:
+        """Import paramiko on demand, muting its optional-crypto warnings."""
         super().__init__(remote, verbose)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -247,6 +286,7 @@ class ParamikoRunner(Runner):
         self.paramiko = paramiko
 
     def _connect(self):
+        """Open and authenticate an SSH client for the configured remote."""
         client = self.paramiko.SSHClient()
         # Accept the host key on first connect; switch back to RejectPolicy
         # for strict verification.
@@ -259,6 +299,8 @@ class ParamikoRunner(Runner):
             "timeout": 15,
             "banner_timeout": 15,
             "auth_timeout": 15,
+            # With an explicit password, skip agent/key discovery so credentials
+            # the user did not configure are never offered.
             "allow_agent": not self.remote.password,
             "look_for_keys": not self.remote.password,
         }
@@ -274,24 +316,30 @@ class ParamikoRunner(Runner):
         return client
 
     def run_capture(self, command: str) -> tuple[int, str, str]:
+        """Run a command and return (exit code, decoded stdout, decoded stderr)."""
         client = self._connect()
         try:
             stdin, stdout, stderr = client.exec_command(command)
             stdin.close()
+            # Read both streams to EOF first; waiting for the exit status with
+            # unread output can fill the channel window and deadlock.
             out = stdout.read().decode("utf-8", "replace")
             err = stderr.read().decode("utf-8", "replace")
+            # recv_exit_status blocks until the remote process has exited.
             rc = stdout.channel.recv_exit_status()
             return rc, out, err
         finally:
             client.close()
 
     def download(self, command: str, path: Path) -> int:
+        """Stream channel stdout into path while a thread forwards stderr."""
         self.stats = RemoteStats()
         client = self._connect()
         try:
             stdin, stdout, stderr = client.exec_command(command, timeout=None)
             stdin.close()
             forwarder = StderrForwarder(self.stats, self.progress)
+            # Drain stderr concurrently so the channel window never fills up.
             thread = threading.Thread(
                 target=pump_stderr,
                 args=(stderr.channel.recv_stderr, forwarder), daemon=True)
@@ -299,6 +347,7 @@ class ParamikoRunner(Runner):
             try:
                 stream_download(ChannelReader(stdout.channel), path,
                                 self.progress)
+                # The exit status is only meaningful once all output is consumed.
                 rc = stdout.channel.recv_exit_status()
             finally:
                 thread.join(timeout=5)
@@ -310,15 +359,18 @@ class ParamikoRunner(Runner):
             client.close()
 
     def upload(self, command: str, path: Path) -> int:
+        """Stream path into channel stdin while stderr and stdout are drained."""
         self.stats = RemoteStats()
         client = self._connect()
         try:
             stdin, stdout, stderr = client.exec_command(command, timeout=None)
             forwarder = StderrForwarder(self.stats, self.progress)
+            # stdin stays open here: it carries the upload until stream_upload ends.
             thread = threading.Thread(
                 target=pump_stderr,
                 args=(stderr.channel.recv_stderr, forwarder), daemon=True)
             thread.start()
+            # Discard stdout as well, in case the remote writes while we upload.
             drain = threading.Thread(
                 target=drain_channel, args=(stdout.channel,), daemon=True)
             drain.start()
@@ -341,15 +393,25 @@ class ParamikoRunner(Runner):
 
 
 class ChannelReader:
+    """Adapt a Paramiko channel to the read interface used by stream_download."""
+
     def __init__(self, channel) -> None:
+        """Wrap the channel to read from."""
         self.channel = channel
 
     def read(self, size: int) -> bytes:
+        """Receive up to size bytes, returning b"" at end of stream."""
         return self.channel.recv(size)
 
 
 class StderrForwarder:
+    """Split piped remote stderr into progress updates and plain output lines."""
+
+    # The remote helper prefixes metadata with this marker so it can be told
+    # apart from git's own progress text.
     MARKER = "@@git-relay@@"
+    # Matches git-style "Phase: 12% (done/total), detail" lines, with an
+    # optional "remote:" prefix added by ssh.
     PROGRESS_RE = re.compile(
         r"^(?:remote:\s*)?"
         r"(?P<phase>[A-Za-z][A-Za-z ]*?):\s+"
@@ -359,6 +421,7 @@ class StderrForwarder:
 
     def __init__(self, stats: RemoteStats,
                  progress: ProgressReporter) -> None:
+        """Initialize buffering state for a single stderr stream."""
         self.stats = stats
         self.progress = progress
         self._raw = ""
@@ -366,6 +429,7 @@ class StderrForwarder:
         self._visible = ""
 
     def feed(self, text: str) -> None:
+        """Consume raw text, holding back incomplete markers and lines until whole."""
         self._raw += text
         while True:
             if self._in_marker:
@@ -380,6 +444,8 @@ class StderrForwarder:
             if index < 0:
                 keep = 0
                 limit = min(len(self._raw), len(self.MARKER) - 1)
+                # Keep a trailing partial marker so a chunk split does not leak it
+                # into the visible output.
                 for size in range(limit, 0, -1):
                     if self.MARKER.startswith(self._raw[-size:]):
                         keep = size
@@ -393,6 +459,7 @@ class StderrForwarder:
             self._in_marker = True
 
     def flush(self) -> None:
+        """Emit any buffered remainder and finish the progress line."""
         if self._in_marker:
             self._parse(self._raw)
             self._raw = ""
@@ -406,6 +473,7 @@ class StderrForwarder:
         self.progress.end()
 
     def _feed_visible(self, text: str) -> None:
+        """Forward complete lines, keeping any trailing partial line buffered."""
         self._visible += text
         while True:
             match = re.search(r"[\r\n]", self._visible)
@@ -416,6 +484,7 @@ class StderrForwarder:
             self._handle_segment(segment)
 
     def _handle_segment(self, segment: str) -> None:
+        """Emit one line as a progress update or as plain output."""
         text = segment.strip()
         if not text:
             return
@@ -437,10 +506,12 @@ class StderrForwarder:
         self.progress.write_line(text)
 
     def _parse(self, line: str) -> None:
+        """Record key=value metadata tokens from a marker line into stats."""
         for token in line.split():
             key, sep, value = token.partition("=")
             if not sep:
                 continue
+            # Metadata is advisory, so malformed values are skipped, not fatal.
             try:
                 if key == "repo_bytes":
                     self.stats.repo_bytes = int(value)
@@ -452,6 +523,7 @@ class StderrForwarder:
 
 def pump_stderr(read: Callable[[int], bytes],
                 forwarder: StderrForwarder) -> None:
+    """Read stderr until EOF and feed decoded text to the forwarder."""
     while True:
         chunk = read(4096)
         if not chunk:
@@ -462,24 +534,30 @@ def pump_stderr(read: Callable[[int], bytes],
 
 
 def drain_stream(stream: BinaryIO) -> None:
+    """Discard remaining stdout so the child never blocks on a full pipe."""
     try:
         while stream.read(65536):
             pass
     except (OSError, ValueError):
+        # The pipe is already gone; nothing left to drain.
         pass
 
 
 def drain_channel(channel) -> None:
+    """Discard remaining channel output so the remote side never stalls."""
     try:
         while channel.recv(65536):
             pass
     except (OSError, EOFError):
+        # The channel closed; that is the normal end of draining.
         pass
 
 
 def make_runner(remote: Remote, verbose: bool) -> Runner:
+    """Create the runner for the resolved backend."""
     backend = resolve_backend(remote)
     if backend == "paramiko":
+        # Fail early with an actionable message instead of an ImportError later.
         if importlib.util.find_spec("paramiko") is None:
             raise RelayError(
                 "ssh_backend=paramiko but paramiko is not installed; install "
@@ -487,6 +565,7 @@ def make_runner(remote: Remote, verbose: bool) -> Runner:
                 "python3 -m pip install paramiko")
         return ParamikoRunner(remote, verbose)
     if os.name == "nt" and remote.password:
+        # OpenSSH on Windows often cannot show the askpass prompt; warn but try.
         warn("OpenSSH password login may fail to show the askpass prompt "
              "on Windows; install paramiko "
              "(python -m pip install paramiko) or use an SSH key")

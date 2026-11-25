@@ -31,22 +31,27 @@ _ESCAPES = {
 
 
 def toml_backend() -> str:
+    """Return the name of the TOML backend that will actually be used."""
     if tomllib is None:
         return "built-in fallback"
     return "tomllib" if tomllib.__name__ == "tomllib" else "tomli"
 
 
 def parse_toml(text: str) -> dict:
+    """Parse TOML text, preferring the standard library or tomli backend."""
     if tomllib is not None:
+        # A real backend handles the full spec, so the subset parser is unused.
         return tomllib.loads(text)
     return _parse_toml_subset(text)
 
 
 def _find_unquoted(text: str, needle: str) -> int:
+    """Return the first index of ``needle`` outside quotes, or -1 if absent."""
     quote = ""
     escaped = False
     for index, char in enumerate(text):
         if quote == '"':
+            # Inside a basic string only a backslash escape can hide a quote.
             if escaped:
                 escaped = False
             elif char == "\\":
@@ -54,6 +59,7 @@ def _find_unquoted(text: str, needle: str) -> int:
             elif char == '"':
                 quote = ""
         elif quote == "'":
+            # Literal strings have no escapes, so the next quote always closes.
             if char == "'":
                 quote = ""
         elif char in "\"'":
@@ -64,17 +70,20 @@ def _find_unquoted(text: str, needle: str) -> int:
 
 
 def _strip_comment(line: str) -> str:
+    """Drop a trailing TOML comment while leaving '#' inside strings intact."""
     index = _find_unquoted(line, "#")
     return line[:index] if index >= 0 else line
 
 
 def _skip_whitespace(text: str, index: int) -> int:
+    """Advance past spaces and tabs and return the new index."""
     while index < len(text) and text[index] in " \t":
         index += 1
     return index
 
 
 def _parse_basic_string(text: str, index: int, lineno: int) -> tuple[str, int]:
+    """Decode a double-quoted string starting after the opening quote."""
     out: list[str] = []
     while index < len(text):
         char = text[index]
@@ -92,6 +101,7 @@ def _parse_basic_string(text: str, index: int, lineno: int) -> tuple[str, int]:
             out.append(_ESCAPES[escape])
             index += 1
         elif escape in ("u", "U"):
+            # Fixed-width hex payload: 4 digits for \u, 8 for \U.
             width = 4 if escape == "u" else 8
             digits = text[index + 1:index + 1 + width]
             if (len(digits) != width
@@ -106,6 +116,7 @@ def _parse_basic_string(text: str, index: int, lineno: int) -> tuple[str, int]:
 
 def _parse_literal_string(
         text: str, index: int, lineno: int) -> tuple[str, int]:
+    """Read a single-quoted literal string, which performs no escape handling."""
     end = text.find("'", index)
     if end < 0:
         raise ValueError(f"line {lineno}: unterminated string")
@@ -113,6 +124,7 @@ def _parse_literal_string(
 
 
 def _parse_array(text: str, index: int, lineno: int) -> tuple[list, int]:
+    """Parse a TOML array starting at the opening bracket."""
     items: list = []
     index += 1
     while True:
@@ -126,6 +138,7 @@ def _parse_array(text: str, index: int, lineno: int) -> tuple[list, int]:
         index = _skip_whitespace(text, index)
         if index >= len(text):
             raise ValueError(f"line {lineno}: unterminated array")
+        # A trailing comma before ']' is legal, so only ',' advances the loop.
         if text[index] == ",":
             index += 1
         elif text[index] != "]":
@@ -133,6 +146,7 @@ def _parse_array(text: str, index: int, lineno: int) -> tuple[list, int]:
 
 
 def _parse_value_at(text: str, index: int, lineno: int) -> tuple[object, int]:
+    """Parse one value at ``index`` and return it with the next index."""
     index = _skip_whitespace(text, index)
     if index >= len(text):
         raise ValueError(f"line {lineno}: missing value")
@@ -154,6 +168,7 @@ def _parse_value_at(text: str, index: int, lineno: int) -> tuple[object, int]:
     if char == "{":
         raise ValueError(
             f"line {lineno}: inline tables need tomli or Python 3.11+")
+    # Bare scalars end at whitespace or at the array/line delimiters.
     end = index
     while end < len(text) and text[end] not in " \t,]":
         end += 1
@@ -170,6 +185,7 @@ def _parse_value_at(text: str, index: int, lineno: int) -> tuple[object, int]:
 
 
 def _parse_value(text: str, lineno: int) -> object:
+    """Parse a complete value line and reject any trailing text."""
     value, index = _parse_value_at(text, 0, lineno)
     index = _skip_whitespace(text, index)
     if index != len(text):
@@ -178,6 +194,7 @@ def _parse_value(text: str, lineno: int) -> object:
 
 
 def _parse_key(text: str, lineno: int) -> list[str]:
+    """Split a possibly dotted key into its parts, honouring quoted segments."""
     parts: list[str] = []
     index = 0
     while True:
@@ -199,12 +216,14 @@ def _parse_key(text: str, lineno: int) -> list[str]:
         index = _skip_whitespace(text, index)
         if index >= len(text):
             return parts
+        # Anything other than a dot after a part means the key is malformed.
         if text[index] != ".":
             raise ValueError(f"line {lineno}: invalid key")
         index += 1
 
 
 def _parse_toml_subset(text: str) -> dict:
+    """Parse the git-relay config subset of TOML without external modules."""
     data: dict = {}
     table = data
     for lineno, raw in enumerate(text.splitlines(), 1):
@@ -220,6 +239,7 @@ def _parse_toml_subset(text: str) -> dict:
                 raise ValueError(f"line {lineno}: malformed table header")
             path = _parse_key(line[1:-1], lineno)
             table = data
+            # Walk or create the nested dicts for a dotted table header.
             for part in path:
                 node = table.setdefault(part, {})
                 if not isinstance(node, dict):
@@ -227,6 +247,7 @@ def _parse_toml_subset(text: str) -> dict:
                         f"line {lineno}: cannot redefine {part!r} as a table")
                 table = node
             continue
+        # '=' may appear inside quoted keys, so split only on an unquoted one.
         split = _find_unquoted(line, "=")
         if split < 0:
             raise ValueError(f"line {lineno}: expected 'key = value'")

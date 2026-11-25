@@ -41,6 +41,7 @@ CONNECTION_ERRNOS = {
 
 
 def ssh_connection_lost(rc: int) -> bool:
+    """Return True when the exit status signals a dropped SSH transport."""
     # OpenSSH exits 255; Paramiko reports a negative status when the channel
     # closes without an exit code.
     return rc == SSH_DISCONNECT_EXIT or rc < 0
@@ -71,6 +72,7 @@ def transfer_with_retry(runner: Runner, command: str, path: Path,
 
 
 def remote_clone_command(url: str, options: CloneOptions) -> str:
+    """Build the remote script that clones the URL and streams a tarball."""
     args = [options.remote_git, "clone"]
     if options.jobs > 0:
         args += ["-c", f"submodule.fetchJobs={options.jobs}"]
@@ -88,6 +90,8 @@ def remote_clone_command(url: str, options: CloneOptions) -> str:
         if options.depth > 0:
             args += ["--shallow-submodules"]
     args += ["--", url, '"$tmp/repo"']
+    # Only the "$tmp/repo" placeholder stays unquoted: it must reach the shell
+    # as a live variable, while every user-supplied value is shell-quoted.
     clone = " ".join(shlex.quote(a) if a != '"$tmp/repo"' else a for a in args)
     lines = [
         "set -eu",
@@ -113,12 +117,15 @@ def remote_clone_command(url: str, options: CloneOptions) -> str:
 
 def remote_submodule_command(url: str, commit: str,
                              options: CloneOptions) -> str:
+    """Build the remote script that streams a commit plus its submodules."""
     clone = " ".join(
         shlex.quote(a) if a != '"$tmp/repo"' else a
         for a in [options.remote_git, "clone", "--no-checkout", "--progress",
                   "--", url, '"$tmp/repo"'])
     commit_arg = shlex.quote(commit)
     git = shlex.quote(options.remote_git)
+    # Both values are shell-quoted since they are interpolated into the remote
+    # script; exit code 4 signals that the commit is missing on the remote.
     lines = [
         "set -eu",
         'tmp=$(mktemp -d /tmp/git-relay.XXXXXX)',
@@ -146,6 +153,7 @@ def remote_submodule_command(url: str, commit: str,
 
 
 def mirror_prelude(url: str, git: GitOptions) -> list[str]:
+    """Emit shell lines that prepare a shared bare mirror cache for the URL."""
     lines = [
         "set -eu",
         "export GIT_TERMINAL_PROMPT=0",
@@ -158,6 +166,7 @@ def mirror_prelude(url: str, git: GitOptions) -> list[str]:
     lines += [
         'mkdir -p "$cache"',
         f"url={shlex.quote(url)}",
+        # Hash the URL into a filesystem-safe, collision-resistant mirror name.
         "key=$(printf '%s' \"$url\" | git hash-object --stdin)",
         'dir="$cache/$key.git"',
         'if [ ! -d "$dir" ]; then',
@@ -169,6 +178,7 @@ def mirror_prelude(url: str, git: GitOptions) -> list[str]:
 
 def remote_fetch_command(url: str, git: GitOptions,
                          prereqs: list[str]) -> str:
+    """Build the remote script that returns an incremental bundle."""
     lines = mirror_prelude(url, git)
     lines += [
         'git -C "$dir" fetch --prune origin '
@@ -176,6 +186,8 @@ def remote_fetch_command(url: str, git: GitOptions,
         'args=""',
     ]
     if prereqs:
+        # Negative prerequisites exclude objects the client already has, which
+        # keeps the transferred bundle small.
         shas = " ".join(shlex.quote(s) for s in prereqs)
         lines += [
             f"for s in {shas}; do",
@@ -190,6 +202,7 @@ def remote_fetch_command(url: str, git: GitOptions,
         "trap 'rm -f \"$bundle\" \"$err\"' EXIT",
         'if ! git -C "$dir" bundle create "$bundle" '
         '--branches --tags $args 2>"$err"; then',
+        # Exit code 3 is the agreed "nothing new" signal, mapped to up-to-date.
         "  if grep -qi 'empty bundle' \"$err\"; then exit 3; fi",
         '  cat "$err" >&2',
         "  exit 1",
@@ -200,7 +213,10 @@ def remote_fetch_command(url: str, git: GitOptions,
 
 
 def remote_push_command(url: str, git: GitOptions, branch: str) -> str:
+    """Build the remote script that ingests an uploaded bundle and pushes."""
     lines = mirror_prelude(url, git)
+    # Bundle refs land in a private namespace so the mirror's own heads are not
+    # rewritten before the real push succeeds.
     refspec = shlex.quote(f"refs/git-relay/push/{branch}:refs/heads/{branch}")
     temp_ref = shlex.quote(f"refs/git-relay/push/{branch}")
     lines += [
@@ -218,10 +234,12 @@ def remote_push_command(url: str, git: GitOptions, branch: str) -> str:
 
 def clone(url: str, dest: Path, remote: Remote, options: CloneOptions,
           verbose: bool, dry_run: bool) -> None:
+    """Clone a repository via the relay host, which streams an archive."""
     if shutil.which("git") is None:
         raise RelayError("local git not found; please install Git")
     command = remote_clone_command(url, options)
     if dry_run:
+        # Dry run only renders the remote script; nothing is contacted.
         print("Remote command:")
         print(command)
         print(f"Local destination: {dest.resolve()}")
@@ -255,6 +273,8 @@ def clone(url: str, dest: Path, remote: Remote, options: CloneOptions,
                     raise RelayError(
                         "unexpected archive layout: missing repo directory")
                 local_checkout(repo, options)
+                # Rename the finished tree into place so a failure never leaves
+                # a half-populated destination behind.
                 os.replace(repo, dest)
                 shutil.rmtree(stage, ignore_errors=True)
             else:
@@ -271,6 +291,7 @@ def clone(url: str, dest: Path, remote: Remote, options: CloneOptions,
 
 def fetch_submodules(dest: Path, remote: Remote, options: CloneOptions,
                      verbose: bool, dry_run: bool) -> None:
+    """Fetch submodule objects from the relay and initialize them locally."""
     if shutil.which("git") is None:
         raise RelayError("local git not found; please install Git")
     repo = resolve_local_repo(dest, options)
@@ -283,6 +304,7 @@ def fetch_submodules(dest: Path, remote: Remote, options: CloneOptions,
         detail = (status.stderr or status.stdout).strip()
         raise RelayError(f"failed to inspect submodules: {detail[-3000:]}")
     entries = [line for line in status.stdout.splitlines() if line.strip()]
+    # "git submodule status" prefixes uninitialized entries with "-".
     uninitialized = [line for line in entries if line.startswith("-")]
     if not entries:
         log(f"no submodules in {repo}")
@@ -291,6 +313,7 @@ def fetch_submodules(dest: Path, remote: Remote, options: CloneOptions,
         log(f"submodules already initialized in {repo}")
         return
     if len(uninitialized) != len(entries):
+        # Mixed state cannot be repaired by a full re-extract, so refuse early.
         raise RelayError(
             "only some submodules are initialized; run "
             "'git submodule update --init --recursive --no-fetch' locally "
@@ -334,6 +357,7 @@ def fetch_submodules(dest: Path, remote: Remote, options: CloneOptions,
             log("extracting submodules")
             extract_archive(archive, repo)
         log("initializing submodules locally")
+        # --no-fetch: objects arrived in the archive, so no network is needed.
         result = run_local(
             ["git", "-C", str(repo), "-c",
              f"submodule.fetchJobs={options.jobs}",
@@ -350,6 +374,7 @@ def fetch_submodules(dest: Path, remote: Remote, options: CloneOptions,
 
 
 def sync_mode(git: GitOptions, override: str = "") -> str:
+    """Return the effective sync mode after validating it is a known one."""
     mode = (override or git.mode).strip().lower()
     if mode not in {"relay", "direct"}:
         raise RelayError(f"sync mode must be relay/direct: {mode}")
@@ -357,11 +382,13 @@ def sync_mode(git: GitOptions, override: str = "") -> str:
 
 
 def remote_name(git: GitOptions, override: str = "") -> str:
+    """Return the effective remote name, defaulting to origin."""
     name = (override or git.remote).strip() or "origin"
     return name
 
 
 def remote_url(repo: Path, name: str) -> str:
+    """Return the configured URL of a remote, failing when it is missing."""
     result = run_local(["git", "-C", str(repo), "remote", "get-url", name],
                        check=False)
     url = result.stdout.strip()
@@ -371,6 +398,7 @@ def remote_url(repo: Path, name: str) -> str:
 
 
 def current_branch(repo: Path) -> str:
+    """Return the checked-out branch name, failing on a detached HEAD."""
     result = run_local(["git", "-C", str(repo), "symbolic-ref", "--quiet",
                         "--short", "HEAD"], check=False)
     branch = result.stdout.strip()
@@ -380,12 +408,16 @@ def current_branch(repo: Path) -> str:
 
 
 def validate_branch(branch: str) -> None:
+    """Reject empty or git-invalid branch names before they reach a command."""
     if not branch:
         raise RelayError("branch name must not be empty")
+    # check-ref-format also blocks names that could smuggle refspec syntax into
+    # the remote push command.
     run_local(["git", "check-ref-format", "--branch", branch])
 
 
 def tracking_prereqs(repo: Path, name: str) -> list[str]:
+    """Collect local SHAs that the remote can use as bundle prerequisites."""
     # SHAs already known locally keep the relayed bundle small. Refs that no
     # longer exist on the remote mirror are filtered out by the remote script.
     result = run_local(["git", "-C", str(repo), "for-each-ref",
@@ -403,6 +435,7 @@ def tracking_prereqs(repo: Path, name: str) -> list[str]:
 
 def relay_fetch(repo: Path, remote: Remote, git: GitOptions, name: str,
                 verbose: bool, dry_run: bool) -> bool:
+    """Fetch through the relay and report whether any refs were updated."""
     url = remote_url(repo, name)
     command = remote_fetch_command(url, git, tracking_prereqs(repo, name))
     if dry_run:
@@ -417,6 +450,7 @@ def relay_fetch(repo: Path, remote: Remote, git: GitOptions, name: str,
         with tempfile.TemporaryDirectory(prefix="git-relay-") as tmp:
             bundle = Path(tmp) / "fetch.bundle"
             rc = transfer_with_retry(runner, command, bundle, "fetching")
+            # Exit code 3 means the remote bundle had no new objects.
             if rc == 3:
                 log(f"already up to date: {repo}")
                 return False
@@ -433,6 +467,8 @@ def relay_fetch(repo: Path, remote: Remote, git: GitOptions, name: str,
                 log(f"already up to date: {repo}")
                 return False
             log("applying fetched objects")
+            # "+" forces the update so rewritten upstream history is mirrored
+            # instead of failing with a non-fast-forward error.
             run_local(["git", "-C", str(repo), "fetch", str(bundle),
                        f"+refs/heads/*:refs/remotes/{name}/*",
                        "+refs/tags/*:refs/tags/*"])
@@ -445,11 +481,14 @@ def fetch_remote(dest: Path, remote: Remote, options: CloneOptions,
                  git: GitOptions, *, branch: str = "", name: str = "",
                  mode: str = "", verbose: bool = False,
                  dry_run: bool = False) -> None:
+    """Fetch from a remote, either directly from this host or via the relay."""
     if shutil.which("git") is None:
         raise RelayError("local git not found; please install Git")
     repo = resolve_local_repo(dest, options)
     name = remote_name(git, name)
     mode = sync_mode(git, mode)
+    # "direct" runs git against the remote from here; "relay" tunnels a bundle
+    # over SSH and keeps the credential on the relay host.
     if mode == "direct":
         cmd = ["git", "-C", str(repo), "fetch", name]
         if dry_run:
@@ -466,9 +505,12 @@ def fetch_remote(dest: Path, remote: Remote, options: CloneOptions,
 
 
 def upstream_ref(repo: Path, name: str, branch: str) -> str:
+    """Resolve the ref that tracks the given branch on the selected remote."""
     result = run_local(["git", "-C", str(repo), "rev-parse", "--abbrev-ref",
                         "--symbolic-full-name", "@{upstream}"], check=False)
     ref = result.stdout.strip()
+    # The configured upstream may point at another remote, so trust it only
+    # for the requested remote; fall back to the tracking ref otherwise.
     if result.returncode == 0 and ref.startswith(f"{name}/"):
         return ref
     candidate = f"refs/remotes/{name}/{branch}"
@@ -483,11 +525,13 @@ def pull_remote(dest: Path, remote: Remote, options: CloneOptions,
                 git: GitOptions, *, branch: str = "", name: str = "",
                 mode: str = "", verbose: bool = False,
                 dry_run: bool = False) -> None:
+    """Fast-forward the local branch from the remote, directly or via relay."""
     if shutil.which("git") is None:
         raise RelayError("local git not found; please install Git")
     repo = resolve_local_repo(dest, options)
     name = remote_name(git, name)
     mode = sync_mode(git, mode)
+    # --ff-only keeps pull from creating merge commits on behalf of the user.
     if mode == "direct":
         cmd = ["git", "-C", str(repo), "pull", "--ff-only"]
         if branch:
@@ -506,6 +550,7 @@ def pull_remote(dest: Path, remote: Remote, options: CloneOptions,
         return
     branch = branch or current_branch(repo)
     target = upstream_ref(repo, name, branch)
+    # The relay only downloads objects, so the merge itself stays local.
     log(f"merging {target} into {branch}")
     result = run_local(["git", "-C", str(repo), "merge", "--ff-only", target],
                        check=False)
@@ -521,6 +566,7 @@ def push_remote(dest: Path, remote: Remote, options: CloneOptions,
                 git: GitOptions, *, branch: str = "", name: str = "",
                 mode: str = "", verbose: bool = False,
                 dry_run: bool = False) -> None:
+    """Push a branch directly or as a bundle relayed through the SSH host."""
     if shutil.which("git") is None:
         raise RelayError("local git not found; please install Git")
     repo = resolve_local_repo(dest, options)
@@ -541,6 +587,8 @@ def push_remote(dest: Path, remote: Remote, options: CloneOptions,
         return
     url = remote_url(repo, name)
     base = f"refs/remotes/{name}/{branch}"
+    # Excluding the last known remote-tracking tip keeps the bundle small;
+    # git then refuses to create an empty bundle when nothing changed.
     has_base = run_local(["git", "-C", str(repo), "rev-parse", "--verify",
                           "--quiet", base],
                          check=False).returncode == 0
@@ -579,12 +627,15 @@ def push_remote(dest: Path, remote: Remote, options: CloneOptions,
             runner.close()
     sha = run_local(["git", "-C", str(repo), "rev-parse", branch]).stdout.strip()
     if sha:
+        # The relayed push bypassed the local transport, so record the new tip
+        # as the remote-tracking ref to keep later bundles incremental.
         run_local(["git", "-C", str(repo), "update-ref", base, sha],
                   check=False)
     log(f"pushed {branch} to {name} in {repo}")
 
 
 def check(remote: Remote, verbose: bool) -> int:
+    """Run local and remote dependency checks; return a process exit code."""
     validate_remote(remote)
     ok = True
     log(f"python: {sys.version.split()[0]} (TOML: {toml_backend()})")
@@ -618,6 +669,8 @@ def check(remote: Remote, verbose: bool) -> int:
         return 1
     runner = make_runner(remote, verbose)
     try:
+        # One probe checks every remote tool the transfer scripts rely on; with
+        # "set -e" the first missing command fails the whole check.
         rc, out, err = runner.run_capture(
             "set -e; git --version; tar --version | head -n 1; "
             "command -v mktemp >/dev/null; command -v gzip >/dev/null; "

@@ -28,7 +28,8 @@ from relay_ops import check, clone, fetch_remote, pull_remote, push_remote
 from relay_ssh import validate_remote
 
 
-# Git Bash (mintty) 默认观感：纯黑底、浅灰前景、Consolas 等宽字、无圆角无立体感。
+# Default mintty look: solid black background, light grey text, Consolas,
+# no rounded 3D edges.
 BG = "#000000"
 FG = "#BFBFBF"
 DIM = "#5A5A5A"
@@ -41,21 +42,23 @@ BLUE = "#5C5CFF"
 LOG_PREFIX = "[git-relay] "
 CWD_MARK = "__GR_CWD__"
 
-# Options 对话框走系统原生浅色外观，与终端窗口区分开
+# The Options dialog keeps the native light theme, so it reads as a normal
+# window rather than a terminal.
 LIGHT_BG = "#F3F3F3"
 LIGHT_FG = "#1A1A1A"
 LIGHT_DIM = "#5F5F5F"
 
 
 def _mono(size: int = 11) -> tuple[str, int]:
-    # Linux 上仍可运行 GUI，字体退化到等宽字体；命令行入口不受影响。
+    """Return the terminal font, falling back to DejaVu where Consolas is absent."""
+    # The GUI can still run on Linux without Consolas; the CLI path is unaffected.
     if os.name == "nt":
         return ("Consolas", size)
     return ("DejaVu Sans Mono", size)
 
 
 def _split_args(line: str) -> list[str]:
-    """终端式分词：支持单双引号，不把 Windows 路径里的反斜杠当转义。"""
+    """Split a line like a shell: honour quotes, not backslash escapes."""
     out: list[str] = []
     buf: list[str] = []
     quote = ""
@@ -88,7 +91,7 @@ _BASH_CANDIDATES = (
 
 
 def _bash_from_git() -> str | None:
-    """从 git.exe 位置反推 Git for Windows 的 bash：<root>\\bin\\bash.exe。"""
+    """Derive Git for Windows' bash (<root>\\bin\\bash.exe) from the git.exe on PATH."""
     git = shutil.which("git")
     if not git:
         return None
@@ -104,7 +107,7 @@ def _bash_from_git() -> str | None:
 
 
 def _is_wsl_bash(path: str) -> bool:
-    """system32\\bash.exe 是 WSL 入口，不是 Git Bash，不能用来跑 Git 命令。"""
+    """Detect the WSL launcher at system32\\bash.exe, which is not Git Bash."""
     try:
         resolved = Path(path).resolve()
     except OSError:
@@ -114,7 +117,7 @@ def _is_wsl_bash(path: str) -> bool:
 
 
 def _detect_shell() -> tuple[str, str]:
-    """挑选用于执行外部命令的 shell：优先 Git Bash，其次 cmd，POSIX 用 $SHELL。"""
+    """Choose Git Bash, then cmd, else $SHELL on POSIX."""
     if os.name == "nt":
         for candidate in _BASH_CANDIDATES:
             if Path(candidate).is_file():
@@ -131,7 +134,8 @@ def _detect_shell() -> tuple[str, str]:
 
 
 def _shell_encoding(kind: str) -> str:
-    # Git Bash 统一输出 UTF-8；cmd 跟随系统代码页。
+    """Return how a shell encodes stdout: UTF-8 for bash, the ANSI code page for cmd."""
+    # Git Bash always emits UTF-8, while cmd inherits the console code page.
     if kind == "bash":
         return "utf-8"
     try:
@@ -141,9 +145,10 @@ def _shell_encoding(kind: str) -> str:
 
 
 def _shell_argv(kind: str, exe: str, command: str) -> list[str]:
-    # 命令后追加一条目录回显，便于把 bash 里的 cd 结果同步到提示符。
+    """Wrap command so the shell also reports its final PWD after running."""
+    # The trailing echo lets a cd inside the shell feed back into the prompt bar.
     if kind == "bash":
-        # -l 让 /etc/profile 生效，PATH 里才有 git、ls、ssh 等。
+        # -l sources /etc/profile so PATH contains git, ls and ssh.
         return [exe, "-lc", f"{command}\nprintf '\\n{CWD_MARK}%s\\n' \"$PWD\""]
     if kind == "cmd":
         return [exe, "/c", f"{command} & echo {CWD_MARK}%CD%"]
@@ -151,7 +156,7 @@ def _shell_argv(kind: str, exe: str, command: str) -> list[str]:
 
 
 def _msys_to_windows(path: str) -> str:
-    """把 /f/repo 这种 Git Bash 风格路径还原成 F:\\repo。"""
+    """Turn an MSYS-style path such as /f/repo back into F:\\repo."""
     if os.name != "nt" or not path.startswith("/") or path.startswith("//"):
         return path
     parts = path.lstrip("/").split("/", 1)
@@ -162,6 +167,7 @@ def _msys_to_windows(path: str) -> str:
 
 
 def _windows_to_msys(path: Path) -> str:
+    """Render a Windows path in MSYS form (/f/repo) for display in the prompt."""
     posix = path.as_posix()
     if os.name == "nt" and len(posix) > 1 and posix[1] == ":":
         return "/" + posix[0].lower() + posix[2:]
@@ -169,26 +175,33 @@ def _windows_to_msys(path: Path) -> str:
 
 
 class QueueWriter:
+    """File-like object that forwards worker output into a queue read by the Tk loop."""
+
     def __init__(self, target: queue.Queue) -> None:
+        """Remember the queue that receives every chunk written here."""
         self.target = target
 
     def write(self, text: str) -> None:
+        """Enqueue non-empty text; empty writes are dropped to avoid log noise."""
         if text:
             self.target.put(text)
 
     def flush(self) -> None:
-        pass
+        """No-op flush, present because callers treat this object as a stream."""
 
     def isatty(self) -> bool:
+        """Report a non-TTY so libraries skip colour codes and cursor tricks."""
         return False
 
 
 def _toml_string(value: str) -> str:
+    """Quote a value as a TOML basic string, leaning on JSON string escaping."""
     return json.dumps(value, ensure_ascii=False)
 
 
 def save_config(path: Path, remote: Remote, options: CloneOptions,
                 git: GitOptions) -> None:
+    """Persist the config file without ever writing the password to disk."""
     lines = [
         "# git-relay 配置（由图形界面保存，不包含密码）",
         "# 密码请在图形界面输入，或设置 GIT_RELAY_PASSWORD 环境变量。",
@@ -220,11 +233,13 @@ def save_config(path: Path, remote: Remote, options: CloneOptions,
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text("\n".join(lines), encoding="utf-8")
+    # Replace atomically so a crash never leaves a half-written config behind.
     os.replace(tmp, path)
 
 
 def hide_console_if_owned() -> None:
-    # 双击 exe 时隐藏附带的控制台；从已有终端启动时保留终端窗口。
+    """Hide the console of a double-clicked GUI build only."""
+    # Only hide the console when this process is its sole owner.
     if os.name != "nt":
         return
     try:
@@ -251,11 +266,14 @@ def hide_console_if_owned() -> None:
 
 
 def enable_dpi_awareness() -> None:
+    """Turn on DPI awareness so Tk text stays sharp on scaled Windows displays."""
     if os.name != "nt":
         return
     try:
         import ctypes
 
+        # System DPI awareness via shcore is preferred; fall back to the
+        # legacy system-wide call.
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except Exception:
         try:
@@ -265,6 +283,8 @@ def enable_dpi_awareness() -> None:
 
 
 class RelayGUI:
+    """Terminal-styled Tk front end that drives relay_ops on a worker thread."""
+
     def __init__(
         self,
         root: tk.Tk,
@@ -272,6 +292,7 @@ class RelayGUI:
         backend_override: str | None = None,
         verbose: bool = False,
     ) -> None:
+        """Load config (tolerating failures), then build the whole widget tree."""
         self.root = root
         self.config_path = config_path
         self.verbose = verbose
@@ -311,14 +332,16 @@ class RelayGUI:
         self.cmd_entry.focus_set()
         hide_console_if_owned()
 
-    # ---------- 字体与变量 ----------
+    # ---------- Fonts and state variables ----------
 
     def _setup_fonts(self) -> None:
+        """Cache the terminal font in three sizes."""
         self.mono = _mono(11)
         self.mono_small = _mono(10)
         self.mono_big = _mono(13)
 
     def _build_vars(self) -> None:
+        """Create every Tk variable plus the prompt and history state."""
         self.host_var = tk.StringVar()
         self.port_var = tk.StringVar(value="22")
         self.user_var = tk.StringVar()
@@ -340,10 +363,11 @@ class RelayGUI:
         self.history: list[str] = []
         self.history_pos = 0
 
-    # ---------- 原生浅色控件（Options 对话框使用） ----------
+    # ---------- Native light-theme widgets used by the Options dialog ----------
 
     def _section(self, parent: tk.Widget, row: int, title: str,
                  expand: bool = False) -> ttk.Frame:
+        """Create a padded label frame laid out as a four-column form section."""
         frame = ttk.LabelFrame(parent, text=title, padding=(12, 8))
         frame.grid(row=row, column=0, sticky="ew", pady=(0, 10))
         frame.columnconfigure(0, minsize=88)
@@ -354,17 +378,20 @@ class RelayGUI:
 
     def _label(self, parent: tk.Widget, text: str,
                color: str | None = None) -> ttk.Label:
+        """Create a left-aligned label in the light dialog palette."""
         return ttk.Label(parent, text=text, foreground=color or LIGHT_FG,
                          anchor="w")
 
     def _hint(self, parent: tk.Widget, text: str, row: int,
               column: int = 1, span: int = 3) -> None:
+        """Place a dimmed helper line under a form row."""
         ttk.Label(parent, text=text, foreground=LIGHT_DIM).grid(
             row=row, column=column, columnspan=span, sticky="w",
             pady=(2, 2))
 
     def _entry(self, parent: tk.Widget, var: tk.StringVar,
                width: int | None = None, show: str | None = None) -> ttk.Entry:
+        """Create an entry bound to var, optionally sized or masked."""
         entry = ttk.Entry(parent, textvariable=var)
         if width:
             entry.configure(width=width)
@@ -376,6 +403,7 @@ class RelayGUI:
                var: tk.StringVar, *, span: int = 1, width: int | None = None,
                show: str | None = None, col: int = 0,
                entry_col: int = 1) -> ttk.Entry:
+        """Lay out a caption plus entry on one form row and return the entry."""
         ttk.Label(parent, text=label).grid(
             row=row, column=col, sticky="w", padx=(0, 10), pady=4)
         entry = self._entry(parent, var, width=width, show=show)
@@ -385,6 +413,7 @@ class RelayGUI:
 
     def _button(self, parent: tk.Widget, text: str, command,
                 accent: bool = False) -> ttk.Button:
+        """Create a button, optionally flagged as the dialog's default action."""
         button = ttk.Button(parent, text=text, command=command)
         if accent:
             try:
@@ -395,11 +424,13 @@ class RelayGUI:
 
     def _check(self, parent: tk.Widget, text: str, variable: tk.BooleanVar,
                command=None) -> ttk.Checkbutton:
+        """Create a checkbutton bound to a BooleanVar."""
         return ttk.Checkbutton(parent, text=text, variable=variable,
                                command=command)
 
     def _choice(self, parent: tk.Widget, values: tuple[str, ...],
                 variable: tk.StringVar) -> ttk.Frame:
+        """Lay out radio buttons in a row and return the container."""
         frame = ttk.Frame(parent)
         for value in values:
             ttk.Radiobutton(frame, text=value, value=value,
@@ -407,9 +438,10 @@ class RelayGUI:
                                                     padx=(0, 14))
         return frame
 
-    # ---------- 主界面：纯终端 ----------
+    # ---------- Main window: terminal only ----------
 
     def _build(self) -> None:
+        """Build the black mintty-style window with log, prompt line and status bar."""
         self.root.title(f"MINGW64 ~ - git-relay {VERSION}")
         self.root.geometry("900x560")
         self.root.minsize(720, 420)
@@ -483,10 +515,11 @@ class RelayGUI:
         tk.Label(status, text="help  ·  右键 → Options", bg=BG, fg=DIM,
                  font=self.mono_small).pack(side="right")
 
-    # ---------- 右键菜单（系统原生浅色菜单） ----------
+    # ---------- Context menu (native light menu) ----------
 
     def _build_menu(self) -> None:
-        # 不自定义配色，交给 Windows 主题绘制，得到白色/浅色的标准菜单
+        """Build the right-click menu and bind it to the terminal widgets."""
+        # No custom colours: the native theme paints a standard light popup menu.
         self.menu = tk.Menu(self.root, tearoff=0)
         self.menu.add_command(label="Options...", command=self._show_options)
         self.menu.add_separator()
@@ -510,6 +543,7 @@ class RelayGUI:
             widget.bind("<Button-3>", self._popup_menu)
 
     def _popup_menu(self, event) -> None:
+        """Show the context menu, greying out task actions while a task runs."""
         state = "disabled" if self.running else "normal"
         for label in ("Test connection", "Clone", "Fetch", "Pull", "Push"):
             try:
@@ -521,12 +555,14 @@ class RelayGUI:
         finally:
             self.menu.grab_release()
 
-    # ---------- Options 对话框 ----------
+    # ---------- Options dialog ----------
 
     def _build_options(self) -> None:
+        """Build the hidden Options dialog using the native light ttk theme."""
         win = tk.Toplevel(self.root)
         win.title("git-relay Options")
         style = ttk.Style(win)
+        # Borrow the theme background so the dialog matches native light windows.
         dialog_bg = style.lookup("TFrame", "background") or LIGHT_BG
         win.configure(bg=dialog_bg)
         win.geometry("760x600")
@@ -593,22 +629,26 @@ class RelayGUI:
         self.options_win = win
 
     def _show_options(self) -> None:
+        """Reveal and focus the hidden Options dialog."""
         self.options_win.deiconify()
         self.options_win.lift()
         self.options_win.focus_force()
         self.host_entry.focus_set()
 
     def _hide_options(self) -> None:
+        """Withdraw the dialog and hand focus back to the command entry."""
         self.options_win.withdraw()
         self.cmd_entry.focus_set()
 
     def _cancel_options(self) -> None:
+        """Discard unsaved edits, restore config values, and hide the dialog."""
         self._apply_config()
         self._hide_options()
 
-    # ---------- 命令行 ----------
+    # ---------- Command line ----------
 
     def _run_command(self, event=None):
+        """Echo, record and execute the line typed at the prompt."""
         line = self.cmd_var.get().strip()
         if not line:
             return "break"
@@ -616,15 +656,18 @@ class RelayGUI:
 
         echo = line
         if line.lower().startswith("set password"):
+            # Mask the secret in the echoed prompt line.
             echo = "set password ***"
         self._append(f"{self.prompt_var.get()} {echo}\n")
         self.history.append(line)
         self.history_pos = len(self.history)
 
         if line.startswith("!"):
+            # A leading bang forces the raw shell, bypassing built-ins.
             self._run_shell(line[1:].strip())
             return "break"
         if line.startswith("|"):
+            # A leading pipe carries shell syntax that _split_args cannot model.
             self._run_shell(line)
             return "break"
 
@@ -639,8 +682,10 @@ class RelayGUI:
         return "break"
 
     def _dispatch(self, parts: list[str], line: str = "") -> None:
+        """Route a parsed command to a built-in handler or pass it to the shell."""
         cmd = parts[0].lower()
         args = parts[1:]
+        # Commands that touch no remote state stay usable while a task runs.
         read_only = {"help", "?", "clear", "cls", "config", "options",
                      "settings", "exit", "quit", "about", "pwd"}
         if self.running and cmd not in read_only:
@@ -667,7 +712,8 @@ class RelayGUI:
         elif cmd == "cd":
             if args and (len(args) > 1
                          or any(ch in line for ch in "&|;<>")):
-                # cd 后面还接了别的命令，整行交给 shell，再回读目录
+                # More commands follow cd, so run the whole line in the shell
+                # and read PWD back.
                 self._run_shell(line)
             else:
                 self._cmd_cd(args)
@@ -697,6 +743,7 @@ class RelayGUI:
             self._run_shell(line or " ".join(parts))
 
     def _cmd_cd(self, args: list[str]) -> None:
+        """Implement cd with ~, cd - and dest syncing when a repo is entered."""
         target_text = args[0] if args else str(Path.home())
         if target_text == "-":
             destination = self.prev_cwd
@@ -717,11 +764,12 @@ class RelayGUI:
             self.prev_cwd = self.cwd
             self.cwd = resolved
             self._refresh_prompt()
-        # 进入 Git 仓库目录时同步 dest，方便接着用 fetch/pull/push
+        # Entering a repo also sets dest so fetch/pull/push work straight away.
         if (resolved / ".git").exists():
             self.dest_var.set(str(resolved))
 
     def _short_cwd(self) -> str:
+        """Render the working directory relative to home for the prompt."""
         home = Path.home()
         try:
             relative = self.cwd.relative_to(home)
@@ -731,14 +779,16 @@ class RelayGUI:
         return "~" if text in ("", ".") else f"~/{text}"
 
     def _refresh_prompt(self) -> None:
+        """Rebuild the prompt text from user, host and current directory."""
         user = self.user_var.get().strip()
         host = self.host_var.get().strip()
         who = f"{user}@{host}" if user and host else "user@win11"
         self.prompt_var.set(f"{who} MINGW64 {self._short_cwd()} $")
 
-    # ---------- 外部 shell ----------
+    # ---------- External shell ----------
 
     def _run_shell(self, command: str) -> None:
+        """Run a raw shell command on a worker thread, streaming output into the log."""
         if not command:
             return
         if self.running or self.shell_running:
@@ -754,10 +804,12 @@ class RelayGUI:
             encoding=self.shell_encoding, errors="replace", bufsize=1,
         )
         if os.name == "nt":
+            # Avoid flashing a console window for every child process.
             kwargs["creationflags"] = getattr(
                 subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
         def worker() -> None:
+            """Pump the child's stdout into the shell queue until it exits."""
             try:
                 proc = subprocess.Popen(argv, **kwargs)
             except OSError as exc:
@@ -770,7 +822,7 @@ class RelayGUI:
                 for chunk in proc.stdout:
                     self.shell_queue.put(("out", chunk))
                 code = proc.wait()
-            except Exception as exc:  # 处理中断或管道异常
+            except Exception as exc:  # interruptions and broken pipes land here
                 self.shell_queue.put(
                     ("error", f"{type(exc).__name__}: {exc}"))
                 return
@@ -778,10 +830,12 @@ class RelayGUI:
                 self._shell_proc = None
             self.shell_queue.put(("end", code))
 
+        # The thread only enqueues; the Tk loop drains the queue in _poll_shell.
         threading.Thread(target=worker, daemon=True).start()
         self.root.after(60, self._poll_shell)
 
     def _poll_shell(self) -> None:
+        """Drain shell output on the Tk event loop and detect completion."""
         finished = False
         while True:
             try:
@@ -791,6 +845,7 @@ class RelayGUI:
             if kind == "out":
                 for piece in str(payload).splitlines(keepends=True):
                     if CWD_MARK in piece:
+                        # The marker separates command output from the final PWD.
                         head, _, tail = piece.partition(CWD_MARK)
                         if head.strip():
                             self._append(head if head.endswith("\n")
@@ -813,6 +868,7 @@ class RelayGUI:
             self.root.after(60, self._poll_shell)
 
     def _sync_cwd(self, value: str) -> None:
+        """Adopt the directory echoed by the shell and refresh the prompt."""
         if not value:
             return
         path = Path(_msys_to_windows(value))
@@ -830,11 +886,13 @@ class RelayGUI:
             self.dest_var.set(str(resolved))
 
     def _interrupt_shell(self) -> bool:
+        """Kill the running shell process tree, returning False when nothing runs."""
         proc = self._shell_proc
         if proc is None or proc.poll() is not None:
             return False
         if os.name == "nt":
             try:
+                # /T kills descendants too, since bash spawns git and ssh as children.
                 subprocess.run(
                     ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -853,6 +911,7 @@ class RelayGUI:
         return True
 
     def _cmd_set(self, args: list[str]) -> None:
+        """Implement set: print or update a single configuration field."""
         settable = {
             "host": self.host_var, "port": self.port_var,
             "user": self.user_var, "password": self.password_var,
@@ -887,6 +946,7 @@ class RelayGUI:
         self._append(f"未知配置项：{key}\n")
 
     def _print_config(self) -> None:
+        """Print current settings with the password masked."""
         password = "***" if self.password_var.get() else "(unset)"
         lines = [
             f"host      = {self.host_var.get() or '(unset)'}",
@@ -906,6 +966,7 @@ class RelayGUI:
         self._append("\n".join(lines) + "\n")
 
     def _help(self) -> None:
+        """Print the built-in command reference."""
         self._append(
             "内置命令：\n"
             "  help                     显示本帮助（bash 内置帮助用 !help）\n"
@@ -929,9 +990,10 @@ class RelayGUI:
             "可用配置项：host port user password key backend url dest "
             "depth branch recurse mode\n")
 
-    # ---------- 历史与剪贴板 ----------
+    # ---------- History and clipboard ----------
 
     def _history_prev(self, event=None):
+        """Step one entry back through the command history."""
         if not self.history:
             return "break"
         self.history_pos = max(0, self.history_pos - 1)
@@ -940,6 +1002,7 @@ class RelayGUI:
         return "break"
 
     def _history_next(self, event=None):
+        """Step forward, showing an empty line once past the newest entry."""
         if not self.history:
             return "break"
         self.history_pos = min(len(self.history), self.history_pos + 1)
@@ -951,6 +1014,7 @@ class RelayGUI:
         return "break"
 
     def _log_clicked(self, event=None) -> None:
+        """Return focus to the entry when a click left no log selection."""
         try:
             if not self.log_text.tag_ranges("sel"):
                 self.cmd_entry.focus_set()
@@ -958,11 +1022,13 @@ class RelayGUI:
             pass
 
     def _copy_text(self, text: str) -> None:
+        """Put text on the clipboard and report its length in the status bar."""
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
         self.status_var.set(f"copied {len(text)} chars")
 
     def _copy_selection(self) -> None:
+        """Copy the log selection, else the entry selection, else the whole entry."""
         text = ""
         try:
             text = self.log_text.get("sel.first", "sel.last")
@@ -979,6 +1045,7 @@ class RelayGUI:
         self._copy_text(text)
 
     def _copy_or_interrupt(self, event=None):
+        """Copy a selection, otherwise interrupt the shell or clear the input line."""
         try:
             text = self.log_text.get("sel.first", "sel.last")
         except tk.TclError:
@@ -989,11 +1056,13 @@ class RelayGUI:
             self._append("^C\n")
             self.status_var.set("已中断")
         else:
+            # Nothing selected and nothing running: behave like ^C on an empty prompt.
             self._append(f"{self.prompt_var.get()} {self.cmd_var.get()}^C\n")
             self.cmd_var.set("")
         return "break"
 
     def _paste_clipboard(self) -> None:
+        """Insert clipboard text at the cursor in the command entry."""
         try:
             text = self.root.clipboard_get()
         except tk.TclError:
@@ -1001,9 +1070,10 @@ class RelayGUI:
         self.cmd_entry.insert("insert", text)
         self.cmd_entry.focus_set()
 
-    # ---------- 日志与提示符 ----------
+    # ---------- Log output and prompt ----------
 
     def _write_banner(self) -> None:
+        """Print the startup banner with the shell path and usage hints."""
         self._append(
             f"git-relay {VERSION} - MINGW64 terminal UI\n"
             f"shell: {self.shell_exe}\n"
@@ -1013,6 +1083,7 @@ class RelayGUI:
 
     @staticmethod
     def _line_tag(body: str) -> str:
+        """Pick a colour tag for a log line from keywords it contains."""
         low = body.lower()
         if not body.strip():
             return "info"
@@ -1037,6 +1108,7 @@ class RelayGUI:
         return "info"
 
     def _append(self, text: str) -> None:
+        """Append text to the log, colouring each line and trimming old output."""
         normalized = text.replace("\r\n", "\n").replace("\r", "\n")
         self.log_text.configure(state="normal")
         for line in normalized.splitlines(keepends=True):
@@ -1052,6 +1124,8 @@ class RelayGUI:
                 self.log_text.insert("end", body + newline, tag)
         try:
             last_line = int(self.log_text.index("end-1c").split(".")[0])
+            # Keep the buffer bounded so long-running commands cannot grow it
+            # without end.
             if last_line > 3000:
                 self.log_text.delete("1.0", "500.0")
         except (tk.TclError, ValueError):
@@ -1060,6 +1134,7 @@ class RelayGUI:
         self.log_text.configure(state="disabled")
 
     def _clear_log(self, event=None) -> str:
+        """Clear the log (Ctrl+L, clear, cls) and keep typing state intact."""
         self.log_text.configure(state="normal")
         self.log_text.delete("1.0", "end")
         self.log_text.configure(state="disabled")
@@ -1067,12 +1142,14 @@ class RelayGUI:
         return "break"
 
     def _error(self, message: str) -> None:
+        """Log an error line and flag the status bar as failed."""
         self._append(f"[错误] {message}\n")
         self.status_var.set("失败")
 
-    # ---------- 配置与业务逻辑（保持不变） ----------
+    # ---------- Config and task orchestration ----------
 
     def _apply_config(self) -> None:
+        """Push the loaded config into the Tk variables and refresh the prompt."""
         self.host_var.set(self.remote.host)
         self.port_var.set(str(self.remote.port))
         self.user_var.set(self.remote.user)
@@ -1088,10 +1165,12 @@ class RelayGUI:
             self.status_var.set(f"已加载 {self.config_path}")
 
     def _toggle_password(self) -> None:
+        """Show or mask the password entry."""
         self.password_entry.configure(
             show="" if self.show_password_var.get() else "*")
 
     def _browse_key(self) -> None:
+        """Let the user pick a private key file."""
         initial = Path.home() / ".ssh"
         path = filedialog.askopenfilename(
             title="选择 SSH 私钥", parent=self.options_win,
@@ -1100,6 +1179,7 @@ class RelayGUI:
             self.key_var.set(path)
 
     def _browse_dest(self) -> None:
+        """Let the user pick a local destination directory."""
         initial = (Path(self.options.download_dir).expanduser()
                    if self.options.download_dir else Path.home())
         path = filedialog.askdirectory(
@@ -1109,6 +1189,7 @@ class RelayGUI:
             self.dest_var.set(path)
 
     def _remote_from_fields(self) -> Remote:
+        """Validate Remote fields, raising RelayError on bad input."""
         try:
             port = int(self.port_var.get().strip())
         except ValueError:
@@ -1125,6 +1206,7 @@ class RelayGUI:
         return remote
 
     def _options_from_fields(self) -> CloneOptions:
+        """Validate clone fields, raising RelayError on bad input."""
         try:
             depth = int(self.depth_var.get().strip())
         except ValueError:
@@ -1139,13 +1221,17 @@ class RelayGUI:
         )
 
     def _git_from_fields(self) -> GitOptions:
+        """Return GitOptions carrying the mode selected in the dialog."""
         return replace(self.git, mode=self.mode_var.get() or "relay")
 
     def _save_settings(self) -> None:
+        """Validate and persist the config, deliberately leaving the password out."""
         try:
             remote = self._remote_from_fields()
             options = self._options_from_fields()
             git = self._git_from_fields()
+            # The password is never persisted: it lives in memory or in
+            # GIT_RELAY_PASSWORD.
             save_config(self.config_path, remote, options, git)
         except Exception as exc:
             self._error(f"保存失败：{exc}")
@@ -1154,6 +1240,7 @@ class RelayGUI:
         self.status_var.set("设置已保存；密码不会被写入文件")
 
     def _test_connection(self) -> None:
+        """Validate the fields, then run the connection check as a background task."""
         try:
             remote = self._remote_from_fields()
         except RelayError as exc:
@@ -1161,12 +1248,14 @@ class RelayGUI:
             return
 
         def action() -> None:
+            """Run check and turn a non-zero exit into a RelayError."""
             if check(remote, self.verbose) != 0:
                 raise RelayError("连接检查失败，请查看上方日志")
 
         self._start_task("测试连接", action, "连接检查通过")
 
     def _start_clone(self) -> None:
+        """Validate fields, resolve the destination, then clone in the background."""
         try:
             remote = self._remote_from_fields()
             options = self._options_from_fields()
@@ -1181,11 +1270,13 @@ class RelayGUI:
         self.dest_var.set(str(dest))
 
         def action() -> None:
+            """Perform the clone; progress is reported through the log queue."""
             clone(url, dest, remote, options, self.verbose, dry_run=False)
 
         self._start_task("克隆仓库", action, f"克隆完成：{dest}")
 
     def _start_sync(self, kind: str) -> None:
+        """Run fetch, pull or push as a background task."""
         try:
             remote = self._remote_from_fields()
             options = self._options_from_fields()
@@ -1203,12 +1294,14 @@ class RelayGUI:
         names = {"fetch": "抓取", "pull": "拉取", "push": "推送"}
 
         def action() -> None:
+            """Call the selected sync operation with the current settings."""
             func(dest, remote, options, git, branch=branch,
                  verbose=self.verbose, dry_run=False)
 
         self._start_task(names[kind], action, f"{names[kind]}完成：{dest}")
 
     def _start_task(self, name: str, action, success_status: str) -> None:
+        """Run action on a daemon thread, funnelling its output into log_queue."""
         if self.running:
             return
         self.running = True
@@ -1220,6 +1313,7 @@ class RelayGUI:
         writer = QueueWriter(self.log_queue)
 
         def worker() -> None:
+            """Run the task with stdout/stderr redirected, then signal the Tk loop."""
             stdout, stderr = sys.stdout, sys.stderr
             sys.stdout = writer
             sys.stderr = writer
@@ -1233,10 +1327,12 @@ class RelayGUI:
             finally:
                 sys.stdout, sys.stderr = stdout, stderr
 
+        # Worker output reaches the widgets only through _poll_log on the Tk event loop.
         threading.Thread(target=worker, daemon=True).start()
         self.root.after(100, self._poll_log)
 
     def _poll_log(self) -> None:
+        """Drain the task queue on the Tk event loop and restore the UI when done."""
         finished = False
         while True:
             try:
@@ -1259,6 +1355,7 @@ class RelayGUI:
             self.root.after(100, self._poll_log)
 
     def _set_buttons(self, enabled: bool) -> None:
+        """Enable or disable the task buttons while a job runs."""
         state = "normal" if enabled else "disabled"
         for button in (self.test_button, self.clone_button, self.save_button):
             try:
@@ -1267,9 +1364,11 @@ class RelayGUI:
                 pass
 
     def _on_close(self) -> None:
+        """Stop any shell, confirm once if a task runs, then destroy the window."""
         if self.shell_running:
             self._interrupt_shell()
         if self.running and not self._closing_confirmed:
+            # A second close during the same task exits without asking again.
             self._closing_confirmed = True
             self.status_var.set("任务进行中，再次关闭将强制退出")
             self._append("\n[警告] 任务仍在进行，再次点击关闭将退出。\n")
@@ -1282,6 +1381,7 @@ def run_gui(
     backend_override: str | None = None,
     verbose: bool = False,
 ) -> int:
+    """Enable DPI awareness, build the root window, and run the Tk main loop."""
     enable_dpi_awareness()
     root = tk.Tk()
     RelayGUI(root, config_path or DEFAULT_CONFIG, backend_override, verbose)
