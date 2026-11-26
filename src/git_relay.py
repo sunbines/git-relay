@@ -63,8 +63,9 @@ def build_parser() -> argparse.ArgumentParser:
             "  git-relay history -n 20\n"
         ))
     parser.add_argument(
-        "-c", "--config", default=str(DEFAULT_CONFIG),
-        help="TOML config file (default: /etc/git-relay/git-relay.toml)")
+        "-c", "--config", default=None,
+        help="TOML config file (default: /etc/git-relay/git-relay.toml, "
+             "GUI uses %%APPDATA%%\\git-relay\\git-relay.toml on Windows)")
     parser.add_argument("--ssh-backend", choices=["auto", "openssh", "paramiko"],
                         help="SSH implementation (default: auto)")
     parser.add_argument("--verbose", action="store_true",
@@ -182,7 +183,9 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         try:
             from git_relay_gui import run_gui
-            return run_gui(Path(args.config).expanduser(),
+            # 未显式指定 -c 时交给 GUI 选平台默认路径（Windows 为用户目录）
+            explicit = Path(args.config).expanduser() if args.config else None
+            return run_gui(explicit,
                            backend_override=args.ssh_backend,
                            verbose=args.verbose)
         except Exception as exc:
@@ -199,7 +202,9 @@ def main(argv: list[str] | None = None) -> int:
         relay_history.record(argv if argv is not None else sys.argv[1:])
 
     try:
-        remote, options, git = load_config(Path(args.config).expanduser())
+        config_path = (Path(args.config).expanduser()
+                       if args.config else DEFAULT_CONFIG)
+        remote, options, git = load_config(config_path)
         if args.ssh_backend:
             remote.backend = args.ssh_backend
         if args.command == "clone":

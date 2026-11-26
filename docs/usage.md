@@ -47,15 +47,32 @@ echo hello > note.txt
 
 `cd` 的实际结果会回读并同步到底部提示符。若与内置命令同名（`test`、`set`、`help` 等），在行首加 `!` 强制走 bash，例如 `!test -f README.md`。
 
+在终端里输入 `git clone <url> [dest]` 与内置 `clone` 完全等价：由中转主机下载、打包，再回传到本地，不走本机直连。支持 `--depth N`、`--branch B`、`--recurse-submodules`、`-j N`；省略 `dest` 时克隆到当前目录下、以仓库名命名的目录。
+
+```bash
+git clone git@github.com:sunbines/3FS.git
+git clone --depth 1 https://github.com/ceph/ceph.git ceph
+git clone --recurse-submodules -j 8 https://github.com/x/y.git deep/y
+git clone --direct https://github.com/ceph/ceph.git   # 不走中转，原生直连
+```
+
+想用原生 git 直连，加 `--direct`，或在行首加 `!`（`!git clone ...`）。出现中转覆盖不到的参数（`--filter`、`--mirror`、`--bare`、多个路径等）时，整行会自动交回原生 git 执行，语义不变。
+
+`fetch` / `pull` / `push`（包括 `git fetch` 这类直连命令）会自动补上 `--progress`（已经写了 `--progress` 或 `-q` 时不动）。git 默认只在 stderr 是终端时输出进度，而这里的输出走管道，补参数后进度才能取到：百分比和传输速率显示在左下状态栏，日志里只保留阶段节点与最终结果，不会被成百上千次刷新刷屏。中转任务同样如此：远端 `git clone` 的百分比与 SSH 传输速率都在状态栏原地刷新。没有进度输出的长命令，状态栏会显示已运行时长（`运行中 12s`），便于判断是慢还是卡死。
+
 需要交互输入的程序（`ssh` 密码提示、`vi`、`top`）依赖真正的 TTY，当前终端不支持，请在本机 Git Bash 窗口里执行。
 
 `set` 支持的配置项：`host`、`port`、`user`、`password`、`key`、`backend`、`url`、`dest`、`depth`、`branch`、`recurse`、`mode`。密码不会回显，也不会写入配置文件。上下方向键翻历史命令；右键菜单提供 Copy / Paste / Clear。
 
 ### 设置
 
-右键任意位置唤出菜单，选 **Options** 打开设置窗口，填写 `host`、`port`、`user`、`password`（或 `key`、`backend`）以及 `url`、`dest`、`depth`、`branch`、`recurse-submodules`、`mode`。**[ Apply ]** 保存，**[ Test ]** 测试连接，**[ Clone ]** 开始克隆，**[ Close ]** 关闭。
+右键任意位置唤出菜单，选 **Options** 打开设置窗口，填写 `host`、`port`、`user`、`password`（或 `key`、`backend`）以及 `url`、`dest`、`depth`、`branch`、`recurse-submodules`、`mode`。**[ Apply ]** 保存，**[ Test connection ]** 测试连接，**[ Clone ]** 开始克隆，**[ Close ]** 关闭。
 
-**[ Apply ]** 会把服务器、用户、端口、私钥和克隆选项（不含密码）写入配置文件 `/etc/git-relay/git-relay.toml`（可用 `-c/--config` 指定其他路径）。普通用户通常没有 `/etc/git-relay` 的写权限，可以以 root 运行，或用 `-c` 指定可写路径。
+**[ Apply ]** 会把服务器、用户、端口、私钥和克隆选项（不含密码）写入配置文件，窗口底部会用绿色显示实际写入的路径；写入失败则在同一位置显示红色错误原因（例如没有权限），不再只写进被对话框挡住的终端日志。
+
+Windows 下配置文件默认位于 `%APPDATA%\git-relay\git-relay.toml`（通常是 `C:\Users\<用户>\AppData\Roaming\git-relay\git-relay.toml`）。若旧的 `\etc\git-relay\git-relay.toml` 已存在，则继续沿用旧文件，不会因为升级而读不到原配置。用 `-c/--config` 可以指定其他路径。
+
+**[ Apply ]** 同时会把修改提交到当前会话（提示符里的 `user@host` 会立即更新）。**[ Close ]**、`Esc` 和窗口关闭按钮都会放弃尚未 Apply 的修改，回到上次保存的状态。
 
 密码不会落盘。下次启动需要重新输入，或设置 `GIT_RELAY_PASSWORD` 环境变量。
 
@@ -301,7 +318,8 @@ python3 src/git_relay.py check
 
 默认配置文件位置：
 
-- 源码运行和打包运行：`/etc/git-relay/git-relay.toml`
+- Linux 命令行（源码运行和打包运行）：`/etc/git-relay/git-relay.toml`
+- Windows 图形界面：`%APPDATA%\git-relay\git-relay.toml`；若旧的 `\etc\git-relay\git-relay.toml` 已存在则继续沿用
 
 可以用 `-c/--config` 指定其他路径。
 

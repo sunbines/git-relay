@@ -4,7 +4,7 @@
 
 同一份 Python 代码可在 **Windows 11** 和 **Linux** 上运行：
 
-- **Windows 11**：双击 GUI 版本（Git Bash 终端风格窗口），在底部提示符后输入命令——内置的 `clone` / `check` 之外，`ls`、`grep`、`git`、`ssh` 等 bash 命令直接可用；参数在右键菜单 → Options 中设置。
+- **Windows 11**：双击 GUI 版本（Git Bash 终端风格窗口），在底部提示符后输入命令——内置的 `clone` / `check` 之外，`ls`、`grep`、`git`、`ssh` 等 bash 命令直接可用（其中 `git clone` 也走中转）；参数在右键菜单 → Options 中设置。
 - **Linux**：在 `/etc/git-relay/git-relay.toml` 或环境变量中配置服务器信息，使用命令行。
 - 服务器地址、用户和密码不写死在代码里。
 
@@ -39,7 +39,7 @@ git-relay/
 
 ### Windows 11
 
-构建后双击 `dist\git-relay.exe`，只打开界面，不会弹出 PowerShell 或控制台。主窗口是一扇 Git Bash（mintty）风格的终端：黑底、Consolas 等宽字体、带颜色标记的输出，底部提示符后可直接输入命令（`help` 查看内置命令，上下键翻历史），右键唤出系统原生浅色菜单，服务器与克隆参数在 **Options**（标准 Windows 窗口）中设置。除内置命令外，其它输入直接交给本机 Git Bash 执行，`ls` / `cat` / `grep` / `git` / `ssh` 等命令、管道与重定向都能用。Linux 端仍使用原有命令行，未做改动。
+构建后双击 `dist\git-relay.exe`，只打开界面，不会弹出 PowerShell 或控制台。主窗口是一扇 Git Bash（mintty）风格的终端：黑底、Consolas 等宽字体、带颜色标记的输出，底部提示符后可直接输入命令（`help` 查看内置命令，上下键翻历史），右键唤出系统原生浅色菜单，服务器与克隆参数在 **Options**（标准 Windows 窗口）中设置。除内置命令外，其它输入直接交给本机 Git Bash 执行，`ls` / `cat` / `grep` / `git` / `ssh` 等命令、管道与重定向都能用。终端里的 `git clone <url> [dest]` 与内置 `clone` 等价：由中转主机下载后回传，不走本机直连（`--direct` 或行首 `!` 可强制原生直连）。Linux 端仍使用原有命令行，未做改动。
 
 命令行使用 `dist\git-relay-cli.exe`，或使用自动分发的 `dist\git-relay.cmd`：
 
@@ -49,7 +49,7 @@ dist\git-relay-cli.exe check
 dist\git-relay.cmd clone --depth 1 https://github.com/ceph/ceph.git ceph
 ```
 
-配置文件默认位于 `/etc/git-relay/git-relay.toml`（Windows 下为当前盘符的 `\etc\git-relay\`）；可用 `-c/--config` 指定其他路径。
+图形界面的配置默认位于 `%APPDATA%\git-relay\git-relay.toml`（若旧的 `\etc\git-relay\git-relay.toml` 已存在则继续沿用）；命令行的默认配置仍是 `/etc/git-relay/git-relay.toml`。两者都可以用 `-c/--config` 指定其他路径。
 
 从源码启动 GUI：
 

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import codecs
 import json
 import locale
 import os
 import queue
+import re
+import shlex
 import shutil
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -21,6 +25,7 @@ from relay_common import (
     GitOptions,
     RelayError,
     Remote,
+    finish_progress_line,
     load_config,
     resolve_dest,
 )
@@ -47,6 +52,8 @@ CWD_MARK = "__GR_CWD__"
 LIGHT_BG = "#F3F3F3"
 LIGHT_FG = "#1A1A1A"
 LIGHT_DIM = "#5F5F5F"
+LIGHT_OK = "#0B6B0B"
+LIGHT_ERROR = "#B00020"
 
 
 def _mono(size: int = 11) -> tuple[str, int]:
@@ -81,6 +88,146 @@ def _split_args(line: str) -> list[str]:
     if buf:
         out.append("".join(buf))
     return out
+
+
+def _inject_progress(command: str) -> str:
+    """Append --progress to git network subcommands.
+
+    The GUI reads stderr through a pipe, so git treats it as a non-terminal and
+    prints no progress at all; cloning a large repository then looks frozen.
+    The flag is spliced into the original command string instead of rebuilding
+    it, so the user's quoting, paths, and globs stay intact.
+    """
+    match = re.match(r"\s*git(?:\.exe)?\s+(clone|fetch|pull|push)\b", command)
+    if not match:
+        return command
+    rest = command[match.end():]
+    if re.search(r"--progress|--quiet|(?<![\w-])-q(?![\w-])", rest):
+        return command
+    return command[:match.end()] + " --progress" + rest
+
+
+# A `git clone` typed in the terminal goes through the relay by default (the
+# remote host downloads, packs, and streams the repository back), exactly like
+# the built-in clone command. Arguments the relay cannot cover fall back to
+# native git so the semantics never change.
+_CLONE_VALUE_FLAGS = {
+    "--depth": "depth", "-b": "branch", "--branch": "branch",
+    "-j": "jobs", "--jobs": "jobs",
+}
+_CLONE_SWITCHES = {
+    "--recurse-submodules": "submodules", "--recursive": "submodules",
+}
+_CLONE_IGNORED = {
+    "--single-branch", "--no-single-branch", "--progress", "--quiet", "-q",
+    "--verbose", "-v", "--no-tags", "--tags",
+}
+_GIT_CLONE_RE = re.compile(r"\s*git(?:\.exe)?\s+clone(?=\s|$)", re.I)
+
+
+def _is_git_clone(line: str) -> bool:
+    """Return True when the line starts with `git clone`."""
+    return _GIT_CLONE_RE.match(line) is not None
+
+
+def _parse_clone_args(argv: list[str]) -> dict | None:
+    """Translate `git clone` arguments into the fields the relay needs.
+
+    Returns None when an argument exceeds relay capabilities (--filter,
+    --mirror, --bare, extra path arguments); the caller then hands the whole
+    line back to native git.
+    """
+    parsed: dict = {"url": "", "dest": "", "depth": None, "branch": None,
+                    "jobs": None, "submodules": False, "direct": False}
+    positional: list[str] = []
+    index = 0
+    paths_only = False
+    while index < len(argv):
+        arg = argv[index]
+        if paths_only or not arg.startswith("-"):
+            positional.append(arg)
+            index += 1
+            continue
+        if arg == "--":
+            paths_only = True
+            index += 1
+            continue
+        name, sep, inline = arg.partition("=")
+        key = _CLONE_VALUE_FLAGS.get(name)
+        if key:
+            if sep:
+                value = inline
+            else:
+                index += 1
+                if index >= len(argv):
+                    raise ValueError(f"{name} 缺少参数值")
+                value = argv[index]
+            if key == "depth":
+                try:
+                    parsed["depth"] = int(value)
+                except ValueError:
+                    raise ValueError(f"--depth 需要整数：{value}")
+                if parsed["depth"] < 0:
+                    raise ValueError("--depth 不能为负数")
+            elif key == "jobs":
+                try:
+                    parsed["jobs"] = int(value)
+                except ValueError:
+                    raise ValueError(f"-j/--jobs 需要整数：{value}")
+                if parsed["jobs"] < 1:
+                    raise ValueError("jobs 必须大于 0")
+            else:
+                parsed["branch"] = value
+        elif name in _CLONE_SWITCHES:
+            parsed[_CLONE_SWITCHES[name]] = True
+        elif name == "--direct":
+            parsed["direct"] = True
+        elif name in _CLONE_IGNORED:
+            pass
+        else:
+            return None
+        index += 1
+    if not positional:
+        raise ValueError("用法：git clone <url> [dest] [--depth N] "
+                         "[--branch B] [--recurse-submodules]")
+    if len(positional) > 2:
+        return None
+    parsed["url"] = positional[0]
+    if len(positional) == 2:
+        parsed["dest"] = positional[1]
+    return parsed
+
+
+def _is_local_repo_url(url: str) -> bool:
+    """Return True for local paths, which the relay host cannot see."""
+    low = url.lower()
+    if low.startswith("file://"):
+        return True
+    if url.startswith(("/", "./", "../", "~", "\\\\")):
+        return True
+    if re.match(r"^[A-Za-z]:[\\/]", url):
+        return True
+    if "://" not in url and "@" not in url:
+        try:
+            return Path(url).expanduser().exists()
+        except OSError:
+            return False
+    return False
+
+
+def _clone_native_command(parsed: dict) -> str:
+    """Rebuild a native git command (used by --direct and fallback paths)."""
+    args = ["git", "clone"]
+    if parsed["depth"]:
+        args += ["--depth", str(parsed["depth"])]
+    if parsed["branch"]:
+        args += ["--branch", parsed["branch"]]
+    if parsed["submodules"]:
+        args.append("--recurse-submodules")
+    args.append(parsed["url"])
+    if parsed["dest"]:
+        args.append(parsed["dest"])
+    return " ".join(shlex.quote(part) for part in args)
 
 
 _BASH_CANDIDATES = (
@@ -194,9 +341,50 @@ class QueueWriter:
         return False
 
 
+class StatusWriter(QueueWriter):
+    """Output channel for relay tasks that pretends to be a terminal.
+
+    The relay reporter only redraws its progress line with "\\r" when it thinks
+    stderr is a TTY. Letting it take that branch keeps progress out of the log
+    and lets _feed_shell_output push it into the bottom status bar instead of
+    writing several lines per second.
+    """
+
+    def isatty(self) -> bool:
+        """Report a TTY so the relay reporter redraws with "\\r" status lines."""
+        return True
+
+    def write(self, text: str) -> None:
+        """Queue text as an "out" event, the shape _poll_shell expects."""
+        # shell_queue carries (kind, payload) tuples, matching _poll_shell
+        if text:
+            self.target.put(("out", text))
+
+
 def _toml_string(value: str) -> str:
     """Quote a value as a TOML basic string, leaning on JSON string escaping."""
     return json.dumps(value, ensure_ascii=False)
+
+
+def default_config_path() -> Path:
+    """Return the config path the GUI uses by default.
+
+    On Windows /etc/git-relay/git-relay.toml would resolve to the root of the
+    current drive (moving with the working directory) and plain users may not
+    be allowed to write there, so the GUI uses
+    %APPDATA%\\git-relay\\git-relay.toml. An existing file at the old location
+    still wins, so upgrades keep reading the previous configuration.
+    """
+    if os.name != "nt":
+        return DEFAULT_CONFIG
+    try:
+        if DEFAULT_CONFIG.exists():
+            return DEFAULT_CONFIG
+    except OSError:
+        pass
+    base = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
+    root = Path(base) if base else Path.home() / "AppData" / "Roaming"
+    return root / "git-relay" / "git-relay.toml"
 
 
 def save_config(path: Path, remote: Remote, options: CloneOptions,
@@ -298,6 +486,7 @@ class RelayGUI:
         self.verbose = verbose
         self.running = False
         self._pending_success = ""
+        self._relay_active = False
         self._closing_confirmed = False
         self.log_queue: queue.Queue = queue.Queue()
 
@@ -308,6 +497,11 @@ class RelayGUI:
         self.shell_running = False
         self.shell_queue: queue.Queue = queue.Queue()
         self._shell_proc: subprocess.Popen | None = None
+        self.shell_command = ""
+        self.shell_started = 0.0
+        self.shell_pending = ""
+        self.shell_progress = ""
+        self.status_tick = 0.0
 
         self.startup_error = ""
         try:
@@ -565,8 +759,8 @@ class RelayGUI:
         # Borrow the theme background so the dialog matches native light windows.
         dialog_bg = style.lookup("TFrame", "background") or LIGHT_BG
         win.configure(bg=dialog_bg)
-        win.geometry("760x600")
-        win.minsize(700, 570)
+        win.geometry("780x560")
+        win.minsize(720, 540)
         win.withdraw()
         win.transient(self.root)
         win.protocol("WM_DELETE_WINDOW", self._cancel_options)
@@ -612,8 +806,14 @@ class RelayGUI:
             row=4, column=1, columnspan=3, sticky="w", pady=4)
         self._hint(repo, "relay 经中转主机访问外网；direct 在本机直接执行 git", 5)
 
+        # Show the result right above the buttons: the dialog covers the log,
+        # so anything written there reads as "the click did nothing".
+        self.options_status = ttk.Label(
+            body, text="", anchor="w", foreground=LIGHT_DIM)
+        self.options_status.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+
         buttons = ttk.Frame(body)
-        buttons.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        buttons.grid(row=3, column=0, sticky="ew", pady=(8, 0))
         self.save_button = self._button(
             buttons, "Apply", self._save_settings, accent=True)
         self.save_button.pack(side="left")
@@ -630,6 +830,7 @@ class RelayGUI:
 
     def _show_options(self) -> None:
         """Reveal and focus the hidden Options dialog."""
+        self._set_options_status(self._options_status_hint(), neutral=True)
         self.options_win.deiconify()
         self.options_win.lift()
         self.options_win.focus_force()
@@ -640,9 +841,24 @@ class RelayGUI:
         self.options_win.withdraw()
         self.cmd_entry.focus_set()
 
+    def _options_status_hint(self) -> str:
+        """Neutral hint shown at the bottom of the Options dialog."""
+        return (f"配置文件：{self.config_path}"
+                "    ·    Apply 保存，Close 放弃未应用的修改")
+
+    def _set_options_status(self, text: str, error: bool = False,
+                            neutral: bool = False) -> None:
+        """Write a result line inside the dialog (green/red/grey)."""
+        color = LIGHT_DIM if neutral else (LIGHT_ERROR if error else LIGHT_OK)
+        try:
+            self.options_status.configure(text=text, foreground=color)
+        except tk.TclError:
+            pass
+
     def _cancel_options(self) -> None:
         """Discard unsaved edits, restore config values, and hide the dialog."""
-        self._apply_config()
+        # Discard edits that were never applied: go back to what is in memory.
+        self._fill_fields_from_memory()
         self._hide_options()
 
     # ---------- Command line ----------
@@ -739,6 +955,12 @@ class RelayGUI:
             self._append(
                 f"git-relay {VERSION} - clone Git repositories through a "
                 "remote Linux host\n")
+        elif (cmd in ("git", "git.exe") and args
+                and args[0].lower() == "clone"
+                and not re.search(r"[&|;<>`]", line)):
+            # Same contract as the built-in clone: the remote host downloads
+            # and streams the repository back instead of cloning from here.
+            self._git_clone(args[1:], line)
         else:
             self._run_shell(line or " ".join(parts))
 
@@ -795,13 +1017,18 @@ class RelayGUI:
             self._append("[警告] 上一条命令仍在执行，请等待完成或按 Ctrl+C 中断\n")
             return
 
+        command = _inject_progress(command)
         self.shell_running = True
+        self.shell_command = command
+        self.shell_started = time.monotonic()
+        self.shell_pending = ""
+        self.shell_progress = ""
+        self.status_tick = 0.0
         self.status_var.set(f"shell: {command[:40]}")
         argv = _shell_argv(self.shell_kind, self.shell_exe, command)
         kwargs = dict(
             cwd=str(self.cwd), stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            encoding=self.shell_encoding, errors="replace", bufsize=1,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0,
         )
         if os.name == "nt":
             # Avoid flashing a console window for every child process.
@@ -817,10 +1044,23 @@ class RelayGUI:
                     ("error", f"无法启动 shell: {exc}"))
                 return
             self._shell_proc = proc
+            decoder = codecs.getincrementaldecoder(self.shell_encoding)(
+                errors="replace")
             try:
                 assert proc.stdout is not None
-                for chunk in proc.stdout:
-                    self.shell_queue.put(("out", chunk))
+                # Drain whatever bytes are already available regardless of
+                # buffering; otherwise git's "\r" progress only reaches the UI
+                # at the next newline and still looks frozen.
+                while True:
+                    raw = proc.stdout.read(4096)
+                    if not raw:
+                        break
+                    text = decoder.decode(raw)
+                    if text:
+                        self.shell_queue.put(("out", text))
+                tail = decoder.decode(b"", True)
+                if tail:
+                    self.shell_queue.put(("out", tail))
                 code = proc.wait()
             except Exception as exc:  # interruptions and broken pipes land here
                 self.shell_queue.put(
@@ -834,37 +1074,101 @@ class RelayGUI:
         threading.Thread(target=worker, daemon=True).start()
         self.root.after(60, self._poll_shell)
 
+    def _feed_shell_output(self, text: str) -> None:
+        """Consume output with terminal semantics: "\\n" logs, "\\r" overwrites."""
+        data = self.shell_pending + text
+        self.shell_pending = ""
+        start = 0
+        index = 0
+        length = len(data)
+        while index < length:
+            char = data[index]
+            if char == "\n":
+                self._emit_shell_segment(data[start:index], "\n")
+                index += 1
+                start = index
+            elif char == "\r":
+                if index + 1 >= length:
+                    # Probably a "\r\n" split across chunks; keep it with the
+                    # following text and decide once the next block arrives.
+                    break
+                if data[index + 1] == "\n":
+                    self._emit_shell_segment(data[start:index], "\n")
+                    index += 2
+                else:
+                    self._emit_shell_segment(data[start:index], "\r")
+                    index += 1
+                start = index
+            else:
+                index += 1
+        if start < length:
+            self.shell_pending = data[start:]
+
+    def _emit_shell_segment(self, body: str, terminator: str) -> None:
+        """Handle one finished segment: log it, sync cwd, or update progress."""
+        if CWD_MARK in body:
+            head, _, tail = body.partition(CWD_MARK)
+            if head.strip():
+                self._append(head if head.endswith("\n") else head + "\n")
+            self._sync_cwd(tail.strip())
+            return
+        if terminator == "\r":
+            # Progress line: refresh the status bar only. Logging every redraw
+            # would scroll the real output away within seconds.
+            if body.strip():
+                self.shell_progress = body.strip()
+                self._update_shell_status()
+            return
+        self.shell_progress = ""
+        self._append(body + "\n")
+
+    def _update_shell_status(self) -> None:
+        """Refresh the status bar with progress or elapsed time."""
+        elapsed = int(time.monotonic() - self.shell_started)
+        if self.shell_progress:
+            self.status_var.set(f"{self.shell_progress}  ·  {elapsed}s")
+        else:
+            self.status_var.set(f"运行中 {elapsed}s  ·  {self.shell_command[:48]}")
+
     def _poll_shell(self) -> None:
         """Drain shell output on the Tk event loop and detect completion."""
         finished = False
+        failed = False
         while True:
             try:
                 kind, payload = self.shell_queue.get_nowait()
             except queue.Empty:
                 break
             if kind == "out":
-                for piece in str(payload).splitlines(keepends=True):
-                    if CWD_MARK in piece:
-                        # The marker separates command output from the final PWD.
-                        head, _, tail = piece.partition(CWD_MARK)
-                        if head.strip():
-                            self._append(head if head.endswith("\n")
-                                         else head + "\n")
-                        self._sync_cwd(tail.strip())
-                        continue
-                    self._append(piece)
+                self._feed_shell_output(str(payload))
             elif kind == "error":
                 self._error(str(payload))
+                failed = True
                 finished = True
             else:
                 finished = True
+                if self.shell_pending:
+                    self._append(self.shell_pending + "\n")
+                    self.shell_pending = ""
                 if payload not in (0, None):
                     self._append(f"[exit {payload}]\n")
         if finished:
             self.shell_running = False
-            if not self.running:
+            self.shell_progress = ""
+            if self._relay_active:
+                self._relay_active = False
+                self.running = False
+                self._set_buttons(True)
+                ok = not failed and payload in (0, None)
+                self.status_var.set(
+                    self._pending_success if ok else "失败")
+            elif not self.running:
                 self.status_var.set("ready")
         else:
+            now = time.monotonic()
+            if now - self.status_tick >= 1.0:
+                self.status_tick = now
+                self._update_shell_status()
             self.root.after(60, self._poll_shell)
 
     def _sync_cwd(self, value: str) -> None:
@@ -982,10 +1286,14 @@ class RelayGUI:
             "  clear | cls              清屏\n"
             "  exit | quit              退出\n"
             "  shell <命令>             交给 shell 执行\n"
+            "  git clone <url> [dest]   走中转：远程下载后回传到本地\n"
+            "     支持 --depth N / --branch B / --recurse-submodules / -j N\n"
+            "     加 --direct 或前缀 ! 则用原生 git 直连下载\n"
             "其它命令直接交给 Git Bash 执行，例如：\n"
             "  ls  ll  cat  less  grep  find  cp  mv  rm  mkdir  touch  chmod\n"
             "  git  ssh  scp  tar  unzip  curl  make  python  ps  kill  which\n"
             "  支持管道与重定向：ls -la | grep txt > out.txt\n"
+            "  git clone/fetch/pull/push 自动加 --progress，进度显示在左下状态栏\n"
             "  与内置命令同名时用 ! 强制走 bash，如 !test -f a.txt\n"
             "可用配置项：host port user password key backend url dest "
             "depth branch recurse mode\n")
@@ -1148,8 +1456,8 @@ class RelayGUI:
 
     # ---------- Config and task orchestration ----------
 
-    def _apply_config(self) -> None:
-        """Push the loaded config into the Tk variables and refresh the prompt."""
+    def _fill_fields_from_memory(self) -> None:
+        """Push the in-memory config into the Tk variables (startup and cancel)."""
         self.host_var.set(self.remote.host)
         self.port_var.set(str(self.remote.port))
         self.user_var.set(self.remote.user)
@@ -1161,6 +1469,10 @@ class RelayGUI:
         self.recurse_var.set(self.options.recurse_submodules)
         self.mode_var.set(self.git.mode)
         self._refresh_prompt()
+
+    def _apply_config(self) -> None:
+        """Fill the fields from memory and report which config file is loaded."""
+        self._fill_fields_from_memory()
         if self.remote.host and self.remote.user:
             self.status_var.set(f"已加载 {self.config_path}")
 
@@ -1187,6 +1499,21 @@ class RelayGUI:
             initialdir=str(initial) if initial.is_dir() else str(Path.home()))
         if path:
             self.dest_var.set(path)
+
+    def _default_clone_base(self) -> Path:
+        """Pick where a clone without an explicit dest lands.
+
+        clone.download_dir exists for the Linux CLI and is usually "/root";
+        on Windows that would resolve under the current drive root, so only
+        configured paths that are absolute on Windows are honoured. Everything
+        else falls back to the current directory, matching Git Bash's feel.
+        """
+        configured = (self.options.download_dir or "").strip()
+        if configured:
+            candidate = Path(configured).expanduser()
+            if os.name != "nt" or candidate.is_absolute():
+                return candidate
+        return self.cwd
 
     def _remote_from_fields(self) -> Remote:
         """Validate Remote fields, raising RelayError on bad input."""
@@ -1234,8 +1561,14 @@ class RelayGUI:
             # GIT_RELAY_PASSWORD.
             save_config(self.config_path, remote, options, git)
         except Exception as exc:
+            self._set_options_status(f"保存失败：{exc}", error=True)
             self._error(f"保存失败：{exc}")
             return
+        # Publish to memory as well: on Close, _fill_fields_from_memory would
+        # otherwise write the old values back and the edit would look unsaved.
+        self.remote, self.options, self.git = remote, options, git
+        self._refresh_prompt()
+        self._set_options_status(f"已保存到 {self.config_path}")
         self._append(f"[gui] 已保存配置（不含密码）：{self.config_path}\n")
         self.status_var.set("设置已保存；密码不会被写入文件")
 
@@ -1254,6 +1587,64 @@ class RelayGUI:
 
         self._start_task("测试连接", action, "连接检查通过")
 
+    def _git_clone(self, argv: list[str], line: str) -> None:
+        """Run `git clone` from the terminal through the relay host."""
+        try:
+            parsed = _parse_clone_args(argv)
+        except ValueError as exc:
+            self._append(f"[错误] {exc}\n")
+            return
+        if parsed is None:
+            self._append(
+                "[git-relay] 参数里有中转不支持的能力，改用原生 git 直连\n")
+            self._run_shell(line)
+            return
+        if parsed["direct"]:
+            self._append("[git-relay] --direct：改用原生 git 直连下载\n")
+            self._run_shell(_inject_progress(_clone_native_command(parsed)))
+            return
+        if _is_local_repo_url(parsed["url"]):
+            self._append("[git-relay] 本地路径，交给原生 git 处理\n")
+            self._run_shell(_inject_progress(_clone_native_command(parsed)))
+            return
+        if self.running or self.shell_running:
+            self._append("[警告] 有任务正在运行，请等待完成\n")
+            return
+        try:
+            remote = self._remote_from_fields()
+            options = self._options_from_fields()
+            if parsed["depth"] is not None:
+                options.depth = parsed["depth"]
+            if parsed["branch"]:
+                options.branch = parsed["branch"]
+            if parsed["submodules"]:
+                options.recurse_submodules = True
+            if parsed["jobs"] is not None:
+                options.jobs = parsed["jobs"]
+            url = parsed["url"]
+            if parsed["dest"]:
+                dest = Path(_msys_to_windows(parsed["dest"])).expanduser()
+                if not dest.is_absolute():
+                    dest = self.cwd / dest
+            else:
+                dest = resolve_dest(url, None,
+                                    replace(options, download_dir=""),
+                                    self._default_clone_base())
+            dest = Path(os.path.abspath(dest))
+        except RelayError as exc:
+            self._error(f"配置错误：{exc}")
+            return
+        self.dest_var.set(str(dest))
+        depth = f"--depth {options.depth} " if options.depth > 0 else ""
+        self._append(
+            f"{LOG_PREFIX}{remote.user}@{remote.host} 下载 {url} "
+            f"{depth}→ 回传到 {dest}\n")
+        self._start_relay(
+            f"克隆 {url}",
+            lambda: clone(url, dest, remote, options, self.verbose,
+                          dry_run=False),
+            f"克隆完成：{dest}")
+
     def _start_clone(self) -> None:
         """Validate fields, resolve the destination, then clone in the background."""
         try:
@@ -1263,7 +1654,9 @@ class RelayGUI:
             if not url:
                 raise RelayError("请填写仓库 URL")
             dest_text = self.dest_var.get().strip()
-            dest = resolve_dest(url, dest_text, options, Path.home())
+            dest = resolve_dest(url, dest_text,
+                                replace(options, download_dir=""),
+                                self._default_clone_base())
         except RelayError as exc:
             self._error(f"配置错误：{exc}")
             return
@@ -1331,6 +1724,52 @@ class RelayGUI:
         threading.Thread(target=worker, daemon=True).start()
         self.root.after(100, self._poll_log)
 
+    def _start_relay(self, name: str, action, success_status: str) -> None:
+        """Run a relay task in a worker thread over the shell output pipeline.
+
+        Sharing that pipeline means the SSH transfer's "\\r" progress is folded
+        into the bottom status bar instead of scrolling the log away.
+        """
+        if self.running or self.shell_running:
+            self._append("[警告] 有任务正在运行，请等待完成\n")
+            return
+        self.running = True
+        self._relay_active = True
+        self._pending_success = success_status
+        self._set_buttons(False)
+        self.shell_running = True
+        self.shell_command = name
+        self.shell_started = time.monotonic()
+        self.shell_pending = ""
+        self.shell_progress = ""
+        self.status_tick = time.monotonic()
+        self.status_var.set(f"{name}进行中...")
+        self._append(f"\n=== {name} ===\n")
+        writer = StatusWriter(self.shell_queue)
+
+        def worker() -> None:
+            stdout, stderr = sys.stdout, sys.stderr
+            sys.stdout = sys.stderr = writer
+            code = 0
+            try:
+                action()
+            except RelayError as exc:
+                finish_progress_line()
+                writer.write(f"{LOG_PREFIX}error: {exc}\n")
+                code = 1
+            except Exception as exc:
+                finish_progress_line()
+                writer.write(
+                    f"{LOG_PREFIX}error: {type(exc).__name__}: {exc}\n")
+                code = 1
+            finally:
+                finish_progress_line()
+                sys.stdout, sys.stderr = stdout, stderr
+            self.shell_queue.put(("end", code))
+
+        threading.Thread(target=worker, daemon=True).start()
+        self.root.after(60, self._poll_shell)
+
     def _poll_log(self) -> None:
         """Drain the task queue on the Tk event loop and restore the UI when done."""
         finished = False
@@ -1384,6 +1823,7 @@ def run_gui(
     """Enable DPI awareness, build the root window, and run the Tk main loop."""
     enable_dpi_awareness()
     root = tk.Tk()
-    RelayGUI(root, config_path or DEFAULT_CONFIG, backend_override, verbose)
+    RelayGUI(root, config_path or default_config_path(), backend_override,
+             verbose)
     root.mainloop()
     return 0

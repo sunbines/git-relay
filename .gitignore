@@ -5,6 +5,7 @@ __pycache__/
 .build-venv/
 build/
 dist/
+.workbuddy/
 
 conf/git-relay.toml
 git-relay.toml
