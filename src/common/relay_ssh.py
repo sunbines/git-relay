@@ -14,7 +14,7 @@ import warnings
 from pathlib import Path
 from typing import BinaryIO, Callable
 
-from relay_common import (
+from common.relay_common import (
     MIB,
     PASSWORD_ENV,
     ProgressReporter,

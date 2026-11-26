@@ -11,9 +11,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-from toml_parse import toml_backend
+from common.toml_parse import toml_backend
 
-from relay_common import (
+from common.relay_common import (
     CloneOptions,
     GitOptions,
     RelayError,
@@ -30,7 +30,7 @@ from relay_common import (
     run_local_stream,
     warn,
 )
-from relay_ssh import Runner, make_runner, resolve_backend, validate_remote
+from common.relay_ssh import Runner, make_runner, resolve_backend, validate_remote
 
 SSH_DISCONNECT_EXIT = 255
 TRANSFER_ATTEMPTS = 2

@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from toml_parse import parse_toml
+from common.toml_parse import parse_toml
 
 VERSION = "1.3"
 MIB = 1 << 20

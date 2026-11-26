@@ -80,15 +80,37 @@ sequenceDiagram
 
 远端 bundle 为空（没有新提交）时返回专用退出码 3，本地显示 “already up to date”。
 
-## 源码模块
+## 源码目录
+
+`src/` 按平台分成三个包：共用引擎、Linux 命令行、Windows 图形界面。依赖方向只有一个：客户端 → 共用，`common` 不会反向引用 `linux` / `win11`。
+
+```text
+src/
+├── common/          共用（平台无关）
+│   ├── relay_common.py   常量、配置加载、本地 git/解压辅助、日志与进度条
+│   ├── relay_ssh.py      SSH 后端、stderr 进度转发、上传/下载与速度统计
+│   ├── relay_ops.py      远端命令构建、clone、子模块、fetch/pull/push、环境检查
+│   └── toml_parse.py     TOML 读取（tomllib / tomli 兼容层）
+├── linux/           Linux 命令行客户端
+│   ├── git_relay.py      入口：参数解析、子命令分发
+│   └── relay_history.py  命令历史记录
+└── win11/           Windows 11 图形界面
+    ├── git_relay_gui.py          Tk 终端窗口
+    └── git_relay_gui_launcher.py 无控制台入口，启动失败写日志并弹框
+```
+
+两个入口脚本都会把 `src/` 自己加进 `sys.path`，因此 `python3 src/linux/git_relay.py`、`script/git-relay`、PyInstaller 打包（`pathex=src`）三种方式都能直接运行，不需要安装成包。
 
 | 文件 | 职责 |
 | --- | --- |
-| `src/git_relay.py` | 命令行入口：参数解析、子命令分发 |
-| `src/relay_common.py` | 常量、配置加载、本地 git/解压辅助、日志与进度条 |
-| `src/relay_ssh.py` | SSH 后端、stderr 进度转发、上传/下载与速度统计 |
-| `src/relay_ops.py` | 远端命令构建、clone、子模块、fetch/pull/push、环境检查 |
-| `src/git_relay_gui.py` | Tk 图形界面 |
+| `src/linux/git_relay.py` | 命令行入口：参数解析、子命令分发 |
+| `src/linux/relay_history.py` | `history` 子命令的落盘记录 |
+| `src/common/relay_common.py` | 常量、配置加载、本地 git/解压辅助、日志与进度条 |
+| `src/common/relay_ssh.py` | SSH 后端、stderr 进度转发、上传/下载与速度统计 |
+| `src/common/relay_ops.py` | 远端命令构建、clone、子模块、fetch/pull/push、环境检查 |
+| `src/common/toml_parse.py` | TOML 解析（标准库 `tomllib`，缺失时退回 `tomli`） |
+| `src/win11/git_relay_gui.py` | Tk 图形界面 |
+| `src/win11/git_relay_gui_launcher.py` | 图形版打包入口 |
 
 ## 限制
 

@@ -25,7 +25,10 @@
 
 ```text
 git-relay/
-├── src/                 Python 源码
+├── src/
+│   ├── common/          共用引擎（配置、SSH、clone/sync 操作，平台无关）
+│   ├── linux/           Linux 命令行客户端（入口 src/linux/git_relay.py）
+│   └── win11/           Windows 11 图形界面（Tk 终端窗口）
 ├── docs/                详细文档
 ├── script/              启动和打包脚本
 ├── setup-git-relay.sh   安装和卸载命令
@@ -54,7 +57,7 @@ dist\git-relay.cmd clone --depth 1 https://github.com/ceph/ceph.git ceph
 从源码启动 GUI：
 
 ```powershell
-python src\git_relay.py gui
+python src\linux\git_relay.py gui
 ```
 
 打包方法见 [docs/build.md](docs/build.md)。

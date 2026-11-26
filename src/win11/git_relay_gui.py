@@ -1,3 +1,11 @@
+"""Windows 11 interface: a mintty-style terminal driving the relay engine.
+
+The window is the whole app: commands are typed at the prompt (built-ins plus a
+real Git Bash), and everything configurable lives behind the right-click menu's
+Options dialog. The relay engine itself is platform-neutral and lives in
+``src/common``.
+"""
+
 from __future__ import annotations
 
 import codecs
@@ -18,7 +26,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, ttk
 
-from relay_common import (
+from common.relay_common import (
     DEFAULT_CONFIG,
     VERSION,
     CloneOptions,
@@ -29,8 +37,14 @@ from relay_common import (
     load_config,
     resolve_dest,
 )
-from relay_ops import check, clone, fetch_remote, pull_remote, push_remote
-from relay_ssh import validate_remote
+from common.relay_ops import (
+    check,
+    clone,
+    fetch_remote,
+    pull_remote,
+    push_remote,
+)
+from common.relay_ssh import validate_remote
 
 
 # Default mintty look: solid black background, light grey text, Consolas,

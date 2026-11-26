@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """git-relay: clone Git repositories through a remote Linux host.
 
+Linux/terminal client: parses the command line and dispatches subcommands. The
+``gui`` subcommand hands off to the Windows interface in ``src/win11``; the
+shared relay engine lives in ``src/common``.
+
 The remote host accesses the internet and runs git clone; the repository is
 packed and streamed back over SSH, then extracted and checked out locally.
 Useful when direct access to GitHub from this machine is slow but an
@@ -20,8 +24,13 @@ import os
 import sys
 from pathlib import Path
 
-import relay_history
-from relay_common import (
+# Running this file as a script puts src/linux on sys.path; add src/ itself so
+# the package imports below also resolve from a plain source checkout.
+_SRC = Path(__file__).resolve().parents[1]
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from common.relay_common import (
     DEFAULT_CONFIG,
     VERSION,
     RelayError,
@@ -31,7 +40,7 @@ from relay_common import (
     render_config,
     resolve_dest,
 )
-from relay_ops import (
+from common.relay_ops import (
     check,
     clone,
     fetch_remote,
@@ -39,6 +48,7 @@ from relay_ops import (
     pull_remote,
     push_remote,
 )
+from linux import relay_history
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -182,8 +192,9 @@ def main(argv: list[str] | None = None) -> int:
             parser.print_help()
             return 2
         try:
-            from git_relay_gui import run_gui
-            # 未显式指定 -c 时交给 GUI 选平台默认路径（Windows 为用户目录）
+            from win11.git_relay_gui import run_gui
+            # Without an explicit -c the GUI picks the per-platform default
+            # (%APPDATA% on Windows, /etc/git-relay elsewhere).
             explicit = Path(args.config).expanduser() if args.config else None
             return run_gui(explicit,
                            backend_override=args.ssh_backend,

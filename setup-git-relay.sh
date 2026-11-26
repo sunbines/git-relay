@@ -103,8 +103,8 @@ if [ "$uninstall" -eq 1 ]; then
     exit 0
 fi
 
-[ -f "$root/src/git_relay.py" ] || {
-    echo "[setup] missing $root/src/git_relay.py" >&2
+[ -f "$root/src/linux/git_relay.py" ] || {
+    echo "[setup] missing $root/src/linux/git_relay.py" >&2
     exit 1
 }
 [ -f "$source" ] || {

@@ -3,7 +3,7 @@ setlocal
 set "HERE=%~dp0"
 set "DIST=%HERE%"
 if exist "%HERE%..\dist\" set "DIST=%HERE%..\dist\"
-set "SRC=%HERE%..\src\git_relay.py"
+set "SRC=%HERE%..\src\linux\git_relay.py"
 
 rem 无参数：打开图形界面，不创建控制台窗口。
 if "%~1"=="" goto gui

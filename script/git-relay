@@ -9,4 +9,4 @@ while [ -L "$self" ]; do
     esac
 done
 here=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)
-exec python3 "$here/../src/git_relay.py" "$@"
+exec python3 "$here/../src/linux/git_relay.py" "$@"

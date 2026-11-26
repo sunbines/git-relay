@@ -11,7 +11,7 @@ script\git-relay.cmd
 或：
 
 ```powershell
-python src\git_relay.py gui
+python src\linux\git_relay.py gui
 ```
 
 打包后直接双击 `dist\git-relay.exe`。这是无控制台的 GUI 版本，不会弹出 PowerShell 窗口，主窗口本身就是一扇 Git Bash（mintty）风格的终端：黑底、Consolas 等宽字体、带颜色标记的输出，底部提示符后可直接输入命令。右键菜单和 **Options** 设置窗口使用系统原生的浅色界面，与终端窗口区分开。Linux 端仍使用原有命令行，不受影响。
@@ -285,7 +285,7 @@ dist\git-relay-cli.exe submodules ceph
 直接调用 Python 源码：
 
 ```bash
-python3 src/git_relay.py check
+python3 src/linux/git_relay.py check
 ```
 
 ## 进度输出

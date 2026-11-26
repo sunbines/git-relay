@@ -7,7 +7,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 ROOT = Path(SPECPATH).resolve().parent
 SRC = ROOT / "src"
 
-hiddenimports = ["git_relay_gui", "git_relay"]
+hiddenimports = ["win11.git_relay_gui", "linux.git_relay"]
 datas = []
 
 # paramiko 是运行时按需导入的，PyInstaller 静态分析发现不了，需要显式收集。
@@ -16,7 +16,7 @@ if importlib.util.find_spec("paramiko") is not None:
     datas += collect_data_files("paramiko")
 
 a = Analysis(
-    [str(SRC / "git_relay_gui_launcher.py")],
+    [str(SRC / "win11" / "git_relay_gui_launcher.py")],
     pathex=[str(SRC)],
     binaries=[],
     datas=datas,
