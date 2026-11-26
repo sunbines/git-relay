@@ -25,7 +25,7 @@
 
 ```text
 git-relay/
-├── src/
+├── src/                 源码（模块说明见 src/README.md）
 │   ├── common/          共用引擎（配置、SSH、clone/sync 操作，平台无关）
 │   ├── linux/           Linux 命令行客户端（入口 src/linux/git_relay.py）
 │   └── win11/           Windows 11 图形界面（Tk 终端窗口）
